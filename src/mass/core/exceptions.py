@@ -247,3 +247,24 @@ class PluginError(MassError):
         details["plugin_name"] = plugin_name
         details["plugin_type"] = plugin_type
         super().__init__(message, code="PLUGIN_ERROR", details=details)
+
+
+class StorageError(MassError):
+    """Raised when a storage operation fails.
+
+    Examples:
+        - Database connection failure
+        - Query execution error
+        - Cache operation failure
+    """
+
+    def __init__(
+        self,
+        message: str,
+        operation: str | None = None,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        details = details or {}
+        if operation:
+            details["operation"] = operation
+        super().__init__(message, code="STORAGE_ERROR", details=details)

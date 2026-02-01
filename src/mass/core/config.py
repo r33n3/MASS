@@ -52,6 +52,10 @@ class AuthSettings(BaseSettings):
     access_token_expire_minutes: int = Field(default=60, ge=1)
     refresh_token_expire_days: int = Field(default=7, ge=1)
     api_key_prefix: str = Field(default="mass_")
+    api_key_salt: str = Field(
+        default="mass-api-key-salt-change-in-production",
+        description="Salt for API key hashing",
+    )
 
 
 class StorageSettings(BaseSettings):
