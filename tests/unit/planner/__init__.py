@@ -1,0 +1,1 @@
+"""AI Scan Planner tests."""
