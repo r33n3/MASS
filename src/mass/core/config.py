@@ -12,7 +12,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class DatabaseSettings(BaseSettings):
-    """Database connection settings."""
+    """Database connection settings.
+
+    Supports:
+    - PostgreSQL: postgresql+asyncpg://user:pass@host:port/db
+    - SQLite: sqlite+aiosqlite:///path/to/db.db
+    """
 
     model_config = SettingsConfigDict(env_prefix="MASS_DB_")
 
@@ -20,10 +25,20 @@ class DatabaseSettings(BaseSettings):
         default="postgresql+asyncpg://mass:mass@localhost:5432/mass",
         description="Database connection URL",
     )
-    pool_size: int = Field(default=10, ge=1, le=100)
-    max_overflow: int = Field(default=20, ge=0, le=100)
+    pool_size: int = Field(default=15, ge=1, le=100)
+    max_overflow: int = Field(default=30, ge=0, le=100)
     pool_timeout: int = Field(default=30, ge=1)
     echo: bool = Field(default=False, description="Echo SQL queries")
+
+    @property
+    def is_sqlite(self) -> bool:
+        """Check if using SQLite database."""
+        return self.url.startswith("sqlite")
+
+    @property
+    def is_postgres(self) -> bool:
+        """Check if using PostgreSQL database."""
+        return "postgresql" in self.url
 
 
 class RedisSettings(BaseSettings):
@@ -111,6 +126,8 @@ class MassSettings(BaseSettings):
         env_prefix="MASS_",
         env_nested_delimiter="__",
         case_sensitive=False,
+        env_file=".env",
+        env_file_encoding="utf-8",
     )
 
     # Application

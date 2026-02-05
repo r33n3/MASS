@@ -1,0 +1,2662 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MASS - Model AI Security Scanner</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-deep: #0a0e1a;
+            --bg-primary: #0f172a;
+            --bg-secondary: #1e293b;
+            --bg-tertiary: #334155;
+            --bg-elevated: #1a2332;
+            --text-primary: #f1f5f9;
+            --text-secondary: #94a3b8;
+            --text-muted: #64748b;
+            --accent: #3b82f6;
+            --accent-bright: #60a5fa;
+            --accent-glow: rgba(59, 130, 246, 0.3);
+            --success: #22c55e;
+            --success-dim: rgba(34, 197, 94, 0.2);
+            --warning: #f59e0b;
+            --warning-dim: rgba(245, 158, 11, 0.2);
+            --error: #ef4444;
+            --error-dim: rgba(239, 68, 68, 0.2);
+            --critical: #dc2626;
+            --border: #2d3a4f;
+            --border-bright: #3d4a5f;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Inter', system-ui, sans-serif;
+            background: var(--bg-deep);
+            color: var(--text-primary);
+            min-height: 100vh;
+            line-height: 1.5;
+        }
+
+        /* Header */
+        header {
+            background: linear-gradient(180deg, var(--bg-secondary) 0%, var(--bg-primary) 100%);
+            padding: 0 2rem;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            height: 64px;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .logo {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: var(--accent);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .logo-icon {
+            width: 32px;
+            height: 32px;
+            background: linear-gradient(135deg, var(--accent) 0%, var(--accent-bright) 100%);
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.875rem;
+        }
+
+        .logo span { color: var(--text-secondary); font-weight: 500; }
+
+        .nav-tabs {
+            display: flex;
+            gap: 0;
+            height: 100%;
+        }
+
+        .nav-tab {
+            padding: 0 1.5rem;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            color: var(--text-secondary);
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            transition: all 0.2s;
+            font-weight: 500;
+            font-size: 0.875rem;
+        }
+
+        .nav-tab:hover {
+            color: var(--text-primary);
+            background: rgba(255,255,255,0.02);
+        }
+
+        .nav-tab.active {
+            color: var(--accent);
+            border-bottom-color: var(--accent);
+            background: rgba(59, 130, 246, 0.05);
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .api-key-group {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .api-key-input {
+            background: var(--bg-primary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 0.5rem 0.75rem;
+            color: var(--text-primary);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.75rem;
+            width: 200px;
+        }
+
+        .api-key-input:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--text-muted);
+        }
+
+        .status-dot.connected { background: var(--success); box-shadow: 0 0 8px var(--success); }
+        .status-dot.error { background: var(--error); }
+
+        /* Buttons */
+        .btn {
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            font-weight: 500;
+            font-size: 0.875rem;
+            cursor: pointer;
+            border: none;
+            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .btn-primary {
+            background: var(--accent);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: var(--accent-bright);
+            box-shadow: 0 0 20px var(--accent-glow);
+        }
+
+        .btn-secondary {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            border: 1px solid var(--border);
+        }
+
+        .btn-secondary:hover {
+            background: var(--border);
+        }
+
+        .btn-sm {
+            padding: 0.375rem 0.75rem;
+            font-size: 0.75rem;
+        }
+
+        .btn-icon {
+            width: 32px;
+            height: 32px;
+            padding: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* Main Content */
+        main {
+            padding: 1.5rem 2rem;
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+
+        .view { display: none; }
+        .view.active { display: block; }
+
+        /* Cards */
+        .card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1.25rem;
+        }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+            padding-bottom: 0.75rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .card-title {
+            font-weight: 600;
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .stat-card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1.25rem;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .stat-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: var(--accent);
+        }
+
+        .stat-card.success::before { background: var(--success); }
+        .stat-card.warning::before { background: var(--warning); }
+        .stat-card.error::before { background: var(--error); }
+
+        .stat-value {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 2rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            line-height: 1;
+        }
+
+        .stat-label {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            margin-top: 0.5rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        /* Tables */
+        .table-container {
+            overflow-x: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th, td {
+            padding: 0.75rem 1rem;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+        }
+
+        th {
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            background: var(--bg-primary);
+        }
+
+        td {
+            font-size: 0.875rem;
+        }
+
+        tr:hover td {
+            background: rgba(255,255,255,0.02);
+        }
+
+        .clickable-row { cursor: pointer; }
+
+        /* Badges */
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.375rem;
+            padding: 0.25rem 0.625rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+
+        .badge-success { background: var(--success-dim); color: var(--success); }
+        .badge-warning { background: var(--warning-dim); color: var(--warning); }
+        .badge-error { background: var(--error-dim); color: var(--error); }
+        .badge-info { background: rgba(59, 130, 246, 0.2); color: var(--accent-bright); }
+
+        .badge-running {
+            background: rgba(59, 130, 246, 0.2);
+            color: var(--accent-bright);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
+
+        /* Forms */
+        .form-group {
+            margin-bottom: 1rem;
+        }
+
+        .form-label {
+            display: block;
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: var(--text-secondary);
+            margin-bottom: 0.5rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .form-input, .form-select, .form-textarea {
+            width: 100%;
+            background: var(--bg-primary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 0.625rem 0.875rem;
+            color: var(--text-primary);
+            font-size: 0.875rem;
+            font-family: inherit;
+        }
+
+        .form-input:focus, .form-select:focus, .form-textarea:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        .form-textarea {
+            resize: vertical;
+            min-height: 100px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.8125rem;
+        }
+
+        /* Grid Layouts */
+        .grid-2 {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1.5rem;
+        }
+
+        .grid-3 {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 1rem;
+        }
+
+        @media (max-width: 1024px) {
+            .grid-2, .grid-3 { grid-template-columns: 1fr; }
+        }
+
+        /* Interrogation specific */
+        .model-config-panel {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1.25rem;
+        }
+
+        .panel-title {
+            font-weight: 600;
+            font-size: 0.875rem;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .panel-title .icon {
+            width: 20px;
+            height: 20px;
+            background: var(--accent);
+            border-radius: 4px;
+        }
+
+        .source-panel .panel-title .icon { background: var(--error); }
+        .dest-panel .panel-title .icon { background: var(--success); }
+
+        .model-list {
+            max-height: 200px;
+            overflow-y: auto;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            margin-top: 0.5rem;
+        }
+
+        .model-item {
+            padding: 0.625rem 0.875rem;
+            border-bottom: 1px solid var(--border);
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.8125rem;
+        }
+
+        .model-item:last-child { border-bottom: none; }
+        .model-item:hover { background: var(--bg-primary); }
+        .model-item.selected { background: rgba(59, 130, 246, 0.1); border-left: 2px solid var(--accent); }
+
+        .model-size {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+        }
+
+        /* Jobs List */
+        .jobs-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .job-item {
+            background: var(--bg-primary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 0.875rem 1rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .job-item:hover {
+            border-color: var(--accent);
+        }
+
+        .job-item.active {
+            border-color: var(--accent);
+            background: rgba(59, 130, 246, 0.05);
+        }
+
+        .job-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.375rem;
+        }
+
+        .job-models {
+            font-size: 0.8125rem;
+            font-weight: 500;
+        }
+
+        .job-meta {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+        }
+
+        /* Conversation Transcript */
+        .transcript-container {
+            background: var(--bg-primary);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1rem;
+            max-height: 500px;
+            overflow-y: auto;
+        }
+
+        .transcript-turn {
+            padding: 0.75rem;
+            margin-bottom: 0.5rem;
+            border-radius: 6px;
+            border-left: 3px solid;
+        }
+
+        .transcript-turn.attacker {
+            background: rgba(59, 130, 246, 0.1);
+            border-left-color: var(--accent);
+        }
+
+        .transcript-turn.target {
+            background: rgba(100, 116, 139, 0.1);
+            border-left-color: var(--text-muted);
+        }
+
+        .transcript-turn.evaluator {
+            background: rgba(34, 197, 94, 0.1);
+            border-left-color: var(--success);
+        }
+
+        .turn-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.5rem;
+            font-size: 0.75rem;
+        }
+
+        .turn-role {
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .turn-role.attacker { color: var(--accent); }
+        .turn-role.target { color: var(--text-secondary); }
+        .turn-role.evaluator { color: var(--success); }
+
+        .turn-meta { color: var(--text-muted); }
+
+        .turn-content {
+            font-size: 0.875rem;
+            line-height: 1.6;
+            white-space: pre-wrap;
+        }
+
+        /* Scan Wizard */
+        .wizard-progress {
+            display: flex;
+            justify-content: center;
+            margin-bottom: 2rem;
+            gap: 0;
+        }
+
+        .wizard-step {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .step-number {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: var(--bg-tertiary);
+            border: 2px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+            font-size: 0.875rem;
+            color: var(--text-muted);
+        }
+
+        .wizard-step.active .step-number {
+            background: var(--accent);
+            border-color: var(--accent);
+            color: white;
+        }
+
+        .wizard-step.completed .step-number {
+            background: var(--success);
+            border-color: var(--success);
+            color: white;
+        }
+
+        .step-label {
+            font-size: 0.8125rem;
+            color: var(--text-muted);
+        }
+
+        .wizard-step.active .step-label { color: var(--text-primary); }
+        .wizard-step.completed .step-label { color: var(--success); }
+
+        .step-connector {
+            width: 60px;
+            height: 2px;
+            background: var(--border);
+            margin: 0 0.5rem;
+        }
+
+        .wizard-step.completed + .step-connector { background: var(--success); }
+
+        .wizard-panel { display: none; }
+        .wizard-panel.active { display: block; }
+
+        .wizard-actions {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 1.5rem;
+            padding-top: 1.5rem;
+            border-top: 1px solid var(--border);
+        }
+
+        /* Target Type Cards */
+        .target-type-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 1rem;
+        }
+
+        .target-type-card {
+            background: var(--bg-primary);
+            border: 2px solid var(--border);
+            border-radius: 8px;
+            padding: 1.25rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-align: center;
+        }
+
+        .target-type-card:hover {
+            border-color: var(--accent);
+        }
+
+        .target-type-card.selected {
+            border-color: var(--accent);
+            background: rgba(59, 130, 246, 0.1);
+        }
+
+        .target-type-icon {
+            width: 48px;
+            height: 48px;
+            margin: 0 auto 0.75rem;
+            background: var(--bg-tertiary);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+        }
+
+        .target-type-name {
+            font-weight: 600;
+            font-size: 0.875rem;
+            margin-bottom: 0.25rem;
+        }
+
+        .target-type-desc {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+        }
+
+        /* Profile Cards */
+        .profile-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 1rem;
+        }
+
+        @media (max-width: 768px) {
+            .profile-grid { grid-template-columns: 1fr; }
+        }
+
+        .profile-card {
+            background: var(--bg-primary);
+            border: 2px solid var(--border);
+            border-radius: 8px;
+            padding: 1.25rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .profile-card:hover { border-color: var(--accent); }
+        .profile-card.selected {
+            border-color: var(--accent);
+            background: rgba(59, 130, 246, 0.1);
+        }
+
+        .profile-name {
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+        }
+
+        .profile-desc {
+            font-size: 0.8125rem;
+            color: var(--text-secondary);
+            margin-bottom: 0.75rem;
+        }
+
+        .profile-analyzers {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.375rem;
+        }
+
+        .analyzer-badge {
+            font-size: 0.6875rem;
+            padding: 0.125rem 0.5rem;
+            border-radius: 3px;
+            background: var(--success-dim);
+            color: var(--success);
+        }
+
+        .analyzer-badge.disabled {
+            background: var(--bg-tertiary);
+            color: var(--text-muted);
+            text-decoration: line-through;
+        }
+
+        /* Agent/Strategy Selection */
+        .agent-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 0.75rem;
+            max-height: 300px;
+            overflow-y: auto;
+            padding: 0.5rem;
+        }
+
+        .agent-checkbox {
+            display: flex;
+            align-items: flex-start;
+            gap: 0.75rem;
+            padding: 0.75rem;
+            background: var(--bg-primary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            cursor: pointer;
+        }
+
+        .agent-checkbox:hover { border-color: var(--accent); }
+
+        .agent-checkbox input { margin-top: 0.125rem; }
+
+        .agent-info {
+            flex: 1;
+        }
+
+        .agent-name {
+            font-weight: 500;
+            font-size: 0.875rem;
+        }
+
+        .agent-category {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+        }
+
+        /* Targets Inventory */
+        .targets-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+        }
+
+        .targets-tabs {
+            display: flex;
+            gap: 0;
+            background: var(--bg-secondary);
+            border-radius: 6px;
+            padding: 0.25rem;
+        }
+
+        .targets-tab {
+            padding: 0.5rem 1rem;
+            border-radius: 4px;
+            font-size: 0.875rem;
+            cursor: pointer;
+            color: var(--text-secondary);
+            transition: all 0.2s;
+        }
+
+        .targets-tab:hover { color: var(--text-primary); }
+        .targets-tab.active {
+            background: var(--accent);
+            color: white;
+        }
+
+        .target-actions {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .health-indicator {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.375rem;
+        }
+
+        .health-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+        }
+
+        .health-dot.healthy { background: var(--success); }
+        .health-dot.unhealthy { background: var(--error); }
+        .health-dot.unknown { background: var(--text-muted); }
+
+        /* Modals */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.7);
+            z-index: 200;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-overlay.active { display: flex; }
+
+        .modal {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            width: 90%;
+            max-width: 600px;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+
+        .modal-header {
+            padding: 1.25rem;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .modal-title {
+            font-weight: 600;
+            font-size: 1.125rem;
+        }
+
+        .modal-close {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-size: 1.5rem;
+            line-height: 1;
+        }
+
+        .modal-body { padding: 1.25rem; }
+
+        .modal-footer {
+            padding: 1.25rem;
+            border-top: 1px solid var(--border);
+            display: flex;
+            justify-content: flex-end;
+            gap: 0.75rem;
+        }
+
+        /* Empty State */
+        .empty-state {
+            text-align: center;
+            padding: 3rem;
+            color: var(--text-muted);
+        }
+
+        .empty-state-icon {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+            opacity: 0.5;
+        }
+
+        /* Toast Notifications */
+        .toast-container {
+            position: fixed;
+            bottom: 1.5rem;
+            right: 1.5rem;
+            z-index: 300;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .toast {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1rem 1.25rem;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            animation: slideIn 0.3s ease;
+            min-width: 300px;
+        }
+
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+
+        .toast.success { border-left: 3px solid var(--success); }
+        .toast.error { border-left: 3px solid var(--error); }
+        .toast.warning { border-left: 3px solid var(--warning); }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: var(--bg-primary);
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: var(--bg-tertiary);
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--border-bright);
+        }
+
+        /* Utility */
+        .mono { font-family: 'JetBrains Mono', monospace; }
+        .text-muted { color: var(--text-muted); }
+        .text-success { color: var(--success); }
+        .text-error { color: var(--error); }
+        .text-warning { color: var(--warning); }
+        .mt-1 { margin-top: 0.5rem; }
+        .mt-2 { margin-top: 1rem; }
+        .mb-1 { margin-bottom: 0.5rem; }
+        .mb-2 { margin-bottom: 1rem; }
+
+        /* File Browser */
+        .browser-entry {
+            padding: 0.625rem 1rem;
+            border-bottom: 1px solid var(--border);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            font-size: 0.875rem;
+        }
+
+        .browser-entry:last-child { border-bottom: none; }
+        .browser-entry:hover { background: var(--bg-primary); }
+
+        .browser-entry-icon {
+            width: 20px;
+            text-align: center;
+            flex-shrink: 0;
+        }
+
+        .browser-entry-name {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .browser-entry-size {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            flex-shrink: 0;
+        }
+
+        .browser-entry.is-dir .browser-entry-name {
+            color: var(--accent);
+            font-weight: 500;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="logo" onclick="showTab('dashboard')">
+            <div class="logo-icon">M</div>
+            MASS <span>Security Scanner</span>
+        </div>
+        <nav class="nav-tabs">
+            <div class="nav-tab active" data-tab="dashboard" onclick="showTab('dashboard')">Dashboard</div>
+            <div class="nav-tab" data-tab="scan" onclick="showTab('scan')">Scan</div>
+            <div class="nav-tab" data-tab="interrogate" onclick="showTab('interrogate')">Interrogate</div>
+            <div class="nav-tab" data-tab="targets" onclick="showTab('targets')">Targets</div>
+        </nav>
+        <div class="header-right">
+            <div class="api-key-group">
+                <input type="password" class="api-key-input" id="apiKeyInput" placeholder="API Key">
+                <button class="btn btn-secondary btn-sm" onclick="connectApiKey()">Connect</button>
+                <div class="status-dot" id="connectionStatus"></div>
+            </div>
+        </div>
+    </header>
+
+    <main>
+        <!-- Dashboard View -->
+        <div id="dashboardView" class="view active">
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-value" id="statTotalScans">0</div>
+                    <div class="stat-label">Total Scans</div>
+                </div>
+                <div class="stat-card" style="--accent: var(--accent);">
+                    <div class="stat-value" id="statActiveScans">0</div>
+                    <div class="stat-label">Active Scans</div>
+                </div>
+                <div class="stat-card error">
+                    <div class="stat-value" id="statCritical">0</div>
+                    <div class="stat-label">Critical Findings</div>
+                </div>
+                <div class="stat-card warning">
+                    <div class="stat-value" id="statHigh">0</div>
+                    <div class="stat-label">High Findings</div>
+                </div>
+                <div class="stat-card success">
+                    <div class="stat-value" id="statTargets">0</div>
+                    <div class="stat-label">Monitored Targets</div>
+                </div>
+            </div>
+
+            <div class="grid-2">
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">Recent Scans</span>
+                        <button class="btn btn-primary btn-sm" onclick="showTab('scan')">New Scan</button>
+                    </div>
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Status</th>
+                                    <th>Findings</th>
+                                    <th>Duration</th>
+                                </tr>
+                            </thead>
+                            <tbody id="scansTableBody">
+                                <tr><td colspan="4" class="text-muted">Loading...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">Recent Interrogations</span>
+                        <button class="btn btn-primary btn-sm" onclick="showTab('interrogate')">New Job</button>
+                    </div>
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Models</th>
+                                    <th>Status</th>
+                                    <th>Attacks</th>
+                                    <th>Duration</th>
+                                </tr>
+                            </thead>
+                            <tbody id="interrogationTableBody">
+                                <tr><td colspan="4" class="text-muted">Loading...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Scan View -->
+        <div id="scanView" class="view">
+            <div class="wizard-progress">
+                <div class="wizard-step active" data-step="1">
+                    <div class="step-number">1</div>
+                    <span class="step-label">Target</span>
+                </div>
+                <div class="step-connector"></div>
+                <div class="wizard-step" data-step="2">
+                    <div class="step-number">2</div>
+                    <span class="step-label">Discovery</span>
+                </div>
+                <div class="step-connector"></div>
+                <div class="wizard-step" data-step="3">
+                    <div class="step-number">3</div>
+                    <span class="step-label">Configure</span>
+                </div>
+                <div class="step-connector"></div>
+                <div class="wizard-step" data-step="4">
+                    <div class="step-number">4</div>
+                    <span class="step-label">Launch</span>
+                </div>
+            </div>
+
+            <!-- Step 1: Target Selection -->
+            <div class="wizard-panel active" data-panel="1">
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">Select Target Type</span>
+                    </div>
+                    <div class="target-type-grid">
+                        <div class="target-type-card" onclick="selectTargetType('deployment')">
+                            <div class="target-type-icon">📁</div>
+                            <div class="target-type-name">Deployment</div>
+                            <div class="target-type-desc">Scan a local directory</div>
+                        </div>
+                        <div class="target-type-card" onclick="selectTargetType('model_endpoint')">
+                            <div class="target-type-icon">🤖</div>
+                            <div class="target-type-name">Model Endpoint</div>
+                            <div class="target-type-desc">Test an AI model API</div>
+                        </div>
+                        <div class="target-type-card" onclick="selectTargetType('agent_endpoint')">
+                            <div class="target-type-icon">🔗</div>
+                            <div class="target-type-name">Agent Endpoint</div>
+                            <div class="target-type-desc">Test an AI agent</div>
+                        </div>
+                        <div class="target-type-card" onclick="selectTargetType('model_file')">
+                            <div class="target-type-icon">💾</div>
+                            <div class="target-type-name">Model File</div>
+                            <div class="target-type-desc">Analyze GGUF/ONNX files</div>
+                        </div>
+                    </div>
+
+                    <!-- Dynamic form sections -->
+                    <div id="targetFormSection" class="mt-2" style="display:none;">
+                        <!-- Deployment/File forms -->
+                        <div id="pathForm" style="display:none;">
+                            <div class="form-group">
+                                <label class="form-label">Source Type</label>
+                                <div class="targets-tabs" style="margin-bottom: 1rem;">
+                                    <div class="targets-tab active" onclick="setPathSourceType('local')">Local / Container</div>
+                                    <div class="targets-tab" onclick="setPathSourceType('github')">GitHub URL</div>
+                                </div>
+                            </div>
+
+                            <!-- Local file browser -->
+                            <div id="localPathSection">
+                                <div class="form-group">
+                                    <label class="form-label">Selected Path</label>
+                                    <div style="display: flex; gap: 0.5rem;">
+                                        <input type="text" class="form-input mono" id="targetPath" placeholder="/app/targets/myproject" style="flex: 1;">
+                                        <button class="btn btn-secondary" onclick="openFileBrowser()">Browse</button>
+                                    </div>
+                                </div>
+
+                                <!-- File Browser Panel -->
+                                <div id="fileBrowserPanel" style="display: none; margin-top: 1rem;">
+                                    <div class="card" style="padding: 0;">
+                                        <div style="padding: 0.75rem 1rem; background: var(--bg-primary); border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center;">
+                                            <span class="mono" style="font-size: 0.8125rem;" id="browserCurrentPath">/app/targets</span>
+                                            <button class="btn btn-secondary btn-sm" onclick="closeFileBrowser()">Close</button>
+                                        </div>
+                                        <div id="browserUpButton" style="padding: 0.5rem 1rem; border-bottom: 1px solid var(--border); cursor: pointer; display: none;" onclick="browserGoUp()">
+                                            <span style="color: var(--accent);">↑ ..</span>
+                                        </div>
+                                        <div id="browserEntries" style="max-height: 300px; overflow-y: auto;">
+                                            <div class="text-muted" style="padding: 1rem;">Loading...</div>
+                                        </div>
+                                        <div style="padding: 0.75rem 1rem; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 0.5rem;">
+                                            <button class="btn btn-primary btn-sm" onclick="selectBrowserPath()">Select This Folder</button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- GitHub URL section -->
+                            <div id="githubPathSection" style="display: none;">
+                                <div class="form-group">
+                                    <label class="form-label">GitHub Repository URL</label>
+                                    <input type="text" class="form-input mono" id="githubUrl" placeholder="https://github.com/owner/repo">
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">Branch (optional)</label>
+                                    <input type="text" class="form-input" id="githubBranch" placeholder="main">
+                                </div>
+                                <p class="text-muted" style="font-size: 0.75rem; margin-top: 0.5rem;">
+                                    The repository will be cloned to the server for scanning.
+                                </p>
+                            </div>
+                        </div>
+
+                        <!-- Model Endpoint form -->
+                        <div id="modelEndpointForm" style="display:none;">
+                            <div class="grid-2">
+                                <div class="form-group">
+                                    <label class="form-label">Provider</label>
+                                    <select class="form-select" id="modelProvider">
+                                        <option value="openai">OpenAI</option>
+                                        <option value="anthropic">Anthropic</option>
+                                        <option value="bedrock">AWS Bedrock</option>
+                                        <option value="azure_openai">Azure OpenAI</option>
+                                        <option value="gemini">Google Gemini</option>
+                                        <option value="grok">xAI Grok</option>
+                                        <option value="ollama">Ollama</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">Model Name</label>
+                                    <input type="text" class="form-input" id="modelName" placeholder="gpt-4o">
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">API Endpoint (optional)</label>
+                                <input type="text" class="form-input mono" id="modelEndpoint" placeholder="https://api.openai.com/v1">
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">API Key</label>
+                                <input type="password" class="form-input mono" id="modelApiKey" placeholder="sk-...">
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">System Prompt (optional)</label>
+                                <textarea class="form-textarea" id="modelSystemPrompt" placeholder="You are a helpful assistant..."></textarea>
+                            </div>
+                        </div>
+
+                        <!-- Agent Endpoint form -->
+                        <div id="agentEndpointForm" style="display:none;">
+                            <div class="form-group">
+                                <label class="form-label">Agent URL</label>
+                                <input type="text" class="form-input mono" id="agentUrl" placeholder="https://agent.example.com/api">
+                            </div>
+                            <div class="grid-2">
+                                <div class="form-group">
+                                    <label class="form-label">Protocol</label>
+                                    <select class="form-select" id="agentProtocol">
+                                        <option value="rest">REST</option>
+                                        <option value="grpc">gRPC</option>
+                                        <option value="mcp">MCP</option>
+                                        <option value="a2a">A2A</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">Auth Type</label>
+                                    <select class="form-select" id="agentAuthType">
+                                        <option value="none">None</option>
+                                        <option value="bearer">Bearer Token</option>
+                                        <option value="api_key">API Key</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">Auth Token</label>
+                                <input type="password" class="form-input mono" id="agentAuthToken" placeholder="Bearer token or API key">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="wizard-actions">
+                        <div></div>
+                        <button class="btn btn-primary" onclick="goToStep(2)" id="step1Next" disabled>Continue</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Step 2: Discovery -->
+            <div class="wizard-panel" data-panel="2">
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">Discovery Results</span>
+                        <button class="btn btn-secondary btn-sm" onclick="runDiscovery()">Re-scan</button>
+                    </div>
+
+                    <div class="stats-grid" id="discoveryStats">
+                        <div class="stat-card">
+                            <div class="stat-value" id="discTotalFiles">0</div>
+                            <div class="stat-label">Total Files</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" id="discComponents">0</div>
+                            <div class="stat-label">Components</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" id="discFrameworks">0</div>
+                            <div class="stat-label">AI Frameworks</div>
+                        </div>
+                    </div>
+
+                    <div id="recommendationBanner" class="mb-2" style="display:none; background: rgba(59,130,246,0.1); border: 1px solid var(--accent); border-radius: 8px; padding: 1rem;">
+                        <strong>Recommended:</strong> <span id="recommendedProfile">Standard</span>
+                        <div class="text-muted mt-1" id="recommendationReason"></div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Component Types to Scan</label>
+                        <div class="agent-grid" id="componentTypeGrid">
+                            <!-- Populated by JS -->
+                        </div>
+                    </div>
+
+                    <div class="wizard-actions">
+                        <button class="btn btn-secondary" onclick="goToStep(1)">Back</button>
+                        <button class="btn btn-primary" onclick="goToStep(3)">Continue</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Step 3: Configuration -->
+            <div class="wizard-panel" data-panel="3">
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">Scan Profile</span>
+                    </div>
+
+                    <div class="profile-grid">
+                        <div class="profile-card" onclick="selectProfile('quick')">
+                            <div class="profile-name">⚡ Quick</div>
+                            <div class="profile-desc">Fast scan for CI/CD pipelines (~2 min)</div>
+                            <div class="profile-analyzers">
+                                <span class="analyzer-badge">secrets</span>
+                                <span class="analyzer-badge">config</span>
+                                <span class="analyzer-badge disabled">model_file</span>
+                            </div>
+                        </div>
+                        <div class="profile-card selected" onclick="selectProfile('standard')">
+                            <div class="profile-name">🔍 Standard</div>
+                            <div class="profile-desc">Balanced analysis (~10 min)</div>
+                            <div class="profile-analyzers">
+                                <span class="analyzer-badge">secrets</span>
+                                <span class="analyzer-badge">config</span>
+                                <span class="analyzer-badge">prompts</span>
+                                <span class="analyzer-badge">pii</span>
+                            </div>
+                        </div>
+                        <div class="profile-card" onclick="selectProfile('comprehensive')">
+                            <div class="profile-name">🛡️ Comprehensive</div>
+                            <div class="profile-desc">Full analysis with interrogation (~30 min)</div>
+                            <div class="profile-analyzers">
+                                <span class="analyzer-badge">all analyzers</span>
+                                <span class="analyzer-badge">interrogation</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="wizard-actions">
+                        <button class="btn btn-secondary" onclick="goToStep(2)">Back</button>
+                        <button class="btn btn-primary" onclick="goToStep(4)">Continue</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Step 4: Review & Launch -->
+            <div class="wizard-panel" data-panel="4">
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">Review & Launch</span>
+                    </div>
+
+                    <div id="reviewSummary">
+                        <!-- Populated by JS -->
+                    </div>
+
+                    <div class="wizard-actions">
+                        <button class="btn btn-secondary" onclick="goToStep(3)">Back</button>
+                        <button class="btn btn-primary" onclick="launchScan()">🚀 Start Scan</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Interrogate View -->
+        <div id="interrogateView" class="view">
+            <div class="grid-2">
+                <!-- Left: Configuration -->
+                <div>
+                    <div class="model-config-panel source-panel mb-2">
+                        <div class="panel-title">
+                            <div class="icon"></div>
+                            Source (Interrogator)
+                        </div>
+                        <div class="grid-2">
+                            <div class="form-group">
+                                <label class="form-label">Provider</label>
+                                <select class="form-select" id="sourceProvider" onchange="loadOllamaModels('source')">
+                                    <option value="ollama">Ollama</option>
+                                    <option value="openai">OpenAI</option>
+                                    <option value="anthropic">Anthropic</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">Model</label>
+                                <input type="text" class="form-input" id="sourceModel" placeholder="qwen3:8b">
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Available Ollama Models</label>
+                            <div class="model-list" id="sourceModelList">
+                                <div class="text-muted" style="padding: 1rem;">Loading...</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="model-config-panel dest-panel mb-2">
+                        <div class="panel-title">
+                            <div class="icon"></div>
+                            Destination (Victim)
+                        </div>
+                        <div class="grid-2">
+                            <div class="form-group">
+                                <label class="form-label">Provider</label>
+                                <select class="form-select" id="destProvider" onchange="loadOllamaModels('dest')">
+                                    <option value="ollama">Ollama</option>
+                                    <option value="openai">OpenAI</option>
+                                    <option value="anthropic">Anthropic</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">Model</label>
+                                <input type="text" class="form-input" id="destModel" placeholder="llama3.1:8b">
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Available Ollama Models</label>
+                            <div class="model-list" id="destModelList">
+                                <div class="text-muted" style="padding: 1rem;">Loading...</div>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">System Prompt (optional)</label>
+                            <textarea class="form-textarea" id="destSystemPrompt" rows="3" placeholder="You are a helpful assistant..."></textarea>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-title">Agents & Strategies</span>
+                        </div>
+                        <div class="agent-grid" id="agentGrid">
+                            <div class="text-muted">Loading agents...</div>
+                        </div>
+                        <div class="mt-2">
+                            <button class="btn btn-primary" onclick="startInterrogation()">🎯 Start Interrogation</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Right: Jobs & Results -->
+                <div>
+                    <div class="card mb-2">
+                        <div class="card-header">
+                            <span class="card-title">Jobs</span>
+                            <button class="btn btn-secondary btn-sm" onclick="loadInterrogationJobs()">Refresh</button>
+                        </div>
+                        <div class="jobs-list" id="jobsList">
+                            <div class="text-muted">Loading jobs...</div>
+                        </div>
+                    </div>
+
+                    <div class="card" id="transcriptCard" style="display:none;">
+                        <div class="card-header">
+                            <span class="card-title">Conversation Transcript</span>
+                            <span class="badge badge-info" id="transcriptStrategy"></span>
+                        </div>
+                        <div class="transcript-container" id="transcriptContainer">
+                            <!-- Populated when viewing a job -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Targets View -->
+        <div id="targetsView" class="view">
+            <div class="targets-header">
+                <div class="targets-tabs">
+                    <div class="targets-tab active" onclick="showTargetsTab('models')">Model Endpoints</div>
+                    <div class="targets-tab" onclick="showTargetsTab('agents')">Agent Endpoints</div>
+                    <div class="targets-tab" onclick="showTargetsTab('gateways')">API Gateways</div>
+                </div>
+                <div class="target-actions">
+                    <button class="btn btn-secondary btn-sm" onclick="refreshTargets()">Refresh</button>
+                    <button class="btn btn-primary btn-sm" onclick="showAddTargetModal()">+ Add Target</button>
+                </div>
+            </div>
+
+            <!-- Model Endpoints Table -->
+            <div id="modelsTargetPanel" class="card">
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Provider</th>
+                                <th>Model</th>
+                                <th>Endpoint</th>
+                                <th>Last Tested</th>
+                                <th>Health</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="modelTargetsBody">
+                            <tr><td colspan="6" class="text-muted">No model endpoints configured</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Agent Endpoints Table -->
+            <div id="agentsTargetPanel" class="card" style="display:none;">
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Name</th>
+                                <th>URL</th>
+                                <th>Protocol</th>
+                                <th>Last Tested</th>
+                                <th>Health</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="agentTargetsBody">
+                            <tr><td colspan="6" class="text-muted">No agent endpoints configured</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- API Gateways Table -->
+            <div id="gatewaysTargetPanel" class="card" style="display:none;">
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Name</th>
+                                <th>Type</th>
+                                <th>Endpoint</th>
+                                <th>Models Available</th>
+                                <th>Status</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="gatewayTargetsBody">
+                            <tr><td colspan="6" class="text-muted">No API gateways configured. Add a LiteLLM or similar gateway to discover cloud models.</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div class="mt-2">
+                    <p class="text-muted" style="font-size: 0.8125rem;">
+                        API Gateways allow MASS to discover and test models from cloud providers (OpenAI, Anthropic, Bedrock, etc.) through a unified interface like LiteLLM.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Add Target Modal -->
+    <div class="modal-overlay" id="addTargetModal">
+        <div class="modal">
+            <div class="modal-header">
+                <span class="modal-title">Add Target</span>
+                <button class="modal-close" onclick="hideModal('addTargetModal')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label class="form-label">Target Type</label>
+                    <select class="form-select" id="addTargetType" onchange="toggleAddTargetForm()">
+                        <option value="model">Model Endpoint</option>
+                        <option value="agent">Agent Endpoint</option>
+                        <option value="gateway">API Gateway</option>
+                    </select>
+                </div>
+
+                <!-- Model Endpoint Fields -->
+                <div id="addModelFields">
+                    <div class="grid-2">
+                        <div class="form-group">
+                            <label class="form-label">Provider</label>
+                            <select class="form-select" id="addModelProvider">
+                                <option value="openai">OpenAI</option>
+                                <option value="anthropic">Anthropic</option>
+                                <option value="bedrock">AWS Bedrock</option>
+                                <option value="azure_openai">Azure OpenAI</option>
+                                <option value="gemini">Google Gemini</option>
+                                <option value="ollama">Ollama</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Model Name</label>
+                            <input type="text" class="form-input" id="addModelName" placeholder="gpt-4o">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Endpoint URL</label>
+                        <input type="text" class="form-input mono" id="addModelEndpoint" placeholder="https://api.openai.com/v1">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">API Key</label>
+                        <input type="password" class="form-input mono" id="addModelKey" placeholder="sk-...">
+                    </div>
+                </div>
+
+                <!-- Agent Endpoint Fields -->
+                <div id="addAgentFields" style="display:none;">
+                    <div class="form-group">
+                        <label class="form-label">Agent Name</label>
+                        <input type="text" class="form-input" id="addAgentName" placeholder="My Agent">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Agent URL</label>
+                        <input type="text" class="form-input mono" id="addAgentUrl" placeholder="https://agent.example.com">
+                    </div>
+                    <div class="grid-2">
+                        <div class="form-group">
+                            <label class="form-label">Protocol</label>
+                            <select class="form-select" id="addAgentProtocol">
+                                <option value="rest">REST</option>
+                                <option value="mcp">MCP</option>
+                                <option value="a2a">A2A</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Auth Token</label>
+                            <input type="password" class="form-input mono" id="addAgentToken">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Gateway Fields -->
+                <div id="addGatewayFields" style="display:none;">
+                    <div class="form-group">
+                        <label class="form-label">Gateway Name</label>
+                        <input type="text" class="form-input" id="addGatewayName" placeholder="Production LiteLLM">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Gateway Type</label>
+                        <select class="form-select" id="addGatewayType">
+                            <option value="litellm">LiteLLM</option>
+                            <option value="openrouter">OpenRouter</option>
+                            <option value="custom">Custom OpenAI-Compatible</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Endpoint URL</label>
+                        <input type="text" class="form-input mono" id="addGatewayEndpoint" placeholder="http://localhost:4000">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">API Key (if required)</label>
+                        <input type="password" class="form-input mono" id="addGatewayKey">
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="hideModal('addTargetModal')">Cancel</button>
+                <button class="btn btn-primary" onclick="saveTarget()">Add Target</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Container -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script>
+        // ============================================
+        // Configuration
+        // ============================================
+        const API_BASE = '/api/v1';
+        const DASH_API = '/api/v1/dashboard';
+        const INT_API = '/api/v1/interrogation';
+
+        // State
+        let apiKey = localStorage.getItem('mass_api_key') || '';
+        let currentTab = 'dashboard';
+        let wizardState = {
+            step: 1,
+            targetType: null,
+            pathSourceType: 'local',
+            profile: 'standard',
+            discoveryData: null
+        };
+        let selectedJob = null;
+        let targets = { models: [], agents: [], gateways: [] };
+
+        // ============================================
+        // Auth & API
+        // ============================================
+        function getAuthHeaders() {
+            const headers = { 'Content-Type': 'application/json' };
+            if (apiKey) headers['X-API-Key'] = apiKey;
+            return headers;
+        }
+
+        async function connectApiKey() {
+            const input = document.getElementById('apiKeyInput');
+            apiKey = input.value.trim();
+            localStorage.setItem('mass_api_key', apiKey);
+
+            try {
+                const res = await fetch(`${DASH_API}/stats`, { headers: getAuthHeaders() });
+                if (res.ok) {
+                    document.getElementById('connectionStatus').classList.add('connected');
+                    document.getElementById('connectionStatus').classList.remove('error');
+                    showToast('Connected successfully', 'success');
+                    refreshDashboard();
+                } else {
+                    throw new Error('Invalid API key');
+                }
+            } catch (e) {
+                document.getElementById('connectionStatus').classList.add('error');
+                document.getElementById('connectionStatus').classList.remove('connected');
+                showToast('Connection failed: ' + e.message, 'error');
+            }
+        }
+
+        // ============================================
+        // Navigation
+        // ============================================
+        function showTab(tab) {
+            currentTab = tab;
+            document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+            document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+            document.getElementById(tab + 'View').classList.add('active');
+            document.querySelector(`.nav-tab[data-tab="${tab}"]`).classList.add('active');
+
+            // Load data for the tab
+            if (tab === 'dashboard') refreshDashboard();
+            if (tab === 'interrogate') {
+                loadOllamaModels('source');
+                loadOllamaModels('dest');
+                loadAgents();
+                loadInterrogationJobs();
+            }
+            if (tab === 'targets') loadTargets();
+        }
+
+        // ============================================
+        // Dashboard
+        // ============================================
+        async function refreshDashboard() {
+            loadStats();
+            loadScans();
+            loadRecentInterrogations();
+        }
+
+        async function loadStats() {
+            try {
+                const res = await fetch(`${DASH_API}/stats`, { headers: getAuthHeaders() });
+                if (!res.ok) return;
+                const data = await res.json();
+                document.getElementById('statTotalScans').textContent = data.total_scans || 0;
+                document.getElementById('statActiveScans').textContent = data.active_scans || 0;
+                document.getElementById('statCritical').textContent = data.findings_by_severity?.critical || 0;
+                document.getElementById('statHigh').textContent = data.findings_by_severity?.high || 0;
+                document.getElementById('statTargets').textContent = (targets.models.length + targets.agents.length) || 0;
+            } catch (e) {
+                console.error('Failed to load stats:', e);
+            }
+        }
+
+        async function loadScans() {
+            try {
+                const res = await fetch(`${DASH_API}/scans?limit=10`, { headers: getAuthHeaders() });
+                if (!res.ok) return;
+                const data = await res.json();
+                const tbody = document.getElementById('scansTableBody');
+                if (!data.length) {
+                    tbody.innerHTML = '<tr><td colspan="4" class="text-muted">No scans yet</td></tr>';
+                    return;
+                }
+                tbody.innerHTML = data.map(s => `
+                    <tr class="clickable-row" onclick="viewScan('${s.id}')">
+                        <td>${escapeHtml(s.name || 'Unnamed')}</td>
+                        <td>${statusBadge(s.status)}</td>
+                        <td>${s.findings_count || 0}</td>
+                        <td>${formatDuration(s.duration_seconds)}</td>
+                    </tr>
+                `).join('');
+            } catch (e) {
+                console.error('Failed to load scans:', e);
+            }
+        }
+
+        async function loadRecentInterrogations() {
+            try {
+                const res = await fetch(`${INT_API}/jobs`, { headers: getAuthHeaders() });
+                if (!res.ok) return;
+                const data = await res.json();
+                const tbody = document.getElementById('interrogationTableBody');
+                if (!data.length) {
+                    tbody.innerHTML = '<tr><td colspan="4" class="text-muted">No interrogations yet</td></tr>';
+                    return;
+                }
+                tbody.innerHTML = data.slice(0, 5).map(j => `
+                    <tr class="clickable-row" onclick="viewInterrogationJob('${j.job_id}')">
+                        <td class="mono" style="font-size:0.75rem">${escapeHtml(j.attacker_model)} → ${escapeHtml(j.target_model)}</td>
+                        <td>${statusBadge(j.status)}</td>
+                        <td>${j.successful_attacks || 0}/${j.strategies_run || 0}</td>
+                        <td>${formatDuration(j.duration_seconds)}</td>
+                    </tr>
+                `).join('');
+            } catch (e) {
+                console.error('Failed to load interrogations:', e);
+            }
+        }
+
+        async function viewScan(id) {
+            try {
+                // Fetch scan details
+                const scanRes = await fetch(`${API_BASE}/scans/${id}`, {
+                    headers: getAuthHeaders()
+                });
+                if (!scanRes.ok) throw new Error('Failed to load scan');
+                const scan = await scanRes.json();
+
+                // Fetch findings
+                const findingsRes = await fetch(`${API_BASE}/scans/${id}/findings`, {
+                    headers: getAuthHeaders()
+                });
+                const findingsData = findingsRes.ok ? await findingsRes.json() : { items: [] };
+                const findings = findingsData.items || findingsData || [];
+
+                // Build severity badge
+                const severityBadge = (sev) => {
+                    const colors = {
+                        critical: '#ef4444',
+                        high: '#f97316',
+                        medium: '#eab308',
+                        low: '#3b82f6',
+                        info: '#6b7280'
+                    };
+                    return `<span style="background: ${colors[sev] || '#6b7280'}; color: white; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600;">${sev.toUpperCase()}</span>`;
+                };
+
+                // Build findings rows
+                const findingsHtml = findings.length > 0 ? findings.map(f => `
+                    <div style="background: var(--bg-primary); padding: 1rem; border-radius: 8px; margin-bottom: 0.75rem; border-left: 3px solid ${f.severity === 'critical' ? '#ef4444' : f.severity === 'high' ? '#f97316' : f.severity === 'medium' ? '#eab308' : '#3b82f6'};">
+                        <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 0.5rem;">
+                            <strong style="flex: 1;">${escapeHtml(f.title)}</strong>
+                            ${severityBadge(f.severity)}
+                        </div>
+                        <p style="color: var(--text-secondary); font-size: 0.875rem; margin: 0.5rem 0;">${escapeHtml(f.description?.substring(0, 200) || '')}${f.description?.length > 200 ? '...' : ''}</p>
+                        <div style="font-size: 0.75rem; color: var(--text-muted);">
+                            <span style="margin-right: 1rem;">Category: ${f.category || 'unknown'}</span>
+                            ${f.file_path ? `<span>File: ${f.file_path.split('/').pop()}</span>` : ''}
+                            ${f.line_number ? `:${f.line_number}` : ''}
+                        </div>
+                    </div>
+                `).join('') : '<p style="color: var(--text-muted); text-align: center; padding: 2rem;">No findings detected</p>';
+
+                // Show modal
+                const modal = document.createElement('div');
+                modal.className = 'modal-overlay';
+                modal.style.display = 'flex';
+                modal.innerHTML = `
+                    <div class="modal" style="max-width: 800px; max-height: 80vh; overflow: hidden; display: flex; flex-direction: column;">
+                        <div class="modal-header">
+                            <h3>Scan Details</h3>
+                            <button class="modal-close" onclick="this.closest('.modal-overlay').remove()">&times;</button>
+                        </div>
+                        <div class="modal-body" style="overflow-y: auto; flex: 1;">
+                            <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 1.5rem;">
+                                <div class="stat-card">
+                                    <div class="stat-label">Status</div>
+                                    <div class="stat-value">${scan.status}</div>
+                                </div>
+                                <div class="stat-card">
+                                    <div class="stat-label">Profile</div>
+                                    <div class="stat-value">${scan.profile || 'standard'}</div>
+                                </div>
+                                <div class="stat-card">
+                                    <div class="stat-label">Duration</div>
+                                    <div class="stat-value">${scan.duration_seconds || 0}s</div>
+                                </div>
+                                <div class="stat-card">
+                                    <div class="stat-label">Total Findings</div>
+                                    <div class="stat-value">${scan.findings_count || 0}</div>
+                                </div>
+                            </div>
+
+                            <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.5rem; margin-bottom: 1.5rem;">
+                                <div style="text-align: center; padding: 0.5rem; background: rgba(239, 68, 68, 0.1); border-radius: 4px;">
+                                    <div style="font-size: 1.5rem; font-weight: bold; color: #ef4444;">${scan.severity_counts?.critical || 0}</div>
+                                    <div style="font-size: 0.75rem; color: var(--text-muted);">Critical</div>
+                                </div>
+                                <div style="text-align: center; padding: 0.5rem; background: rgba(249, 115, 22, 0.1); border-radius: 4px;">
+                                    <div style="font-size: 1.5rem; font-weight: bold; color: #f97316;">${scan.severity_counts?.high || 0}</div>
+                                    <div style="font-size: 0.75rem; color: var(--text-muted);">High</div>
+                                </div>
+                                <div style="text-align: center; padding: 0.5rem; background: rgba(234, 179, 8, 0.1); border-radius: 4px;">
+                                    <div style="font-size: 1.5rem; font-weight: bold; color: #eab308;">${scan.severity_counts?.medium || 0}</div>
+                                    <div style="font-size: 0.75rem; color: var(--text-muted);">Medium</div>
+                                </div>
+                                <div style="text-align: center; padding: 0.5rem; background: rgba(59, 130, 246, 0.1); border-radius: 4px;">
+                                    <div style="font-size: 1.5rem; font-weight: bold; color: #3b82f6;">${scan.severity_counts?.low || 0}</div>
+                                    <div style="font-size: 0.75rem; color: var(--text-muted);">Low</div>
+                                </div>
+                            </div>
+
+                            <h4 style="margin-bottom: 1rem; border-bottom: 1px solid var(--border); padding-bottom: 0.5rem;">Findings</h4>
+                            ${findingsHtml}
+                        </div>
+                    </div>
+                `;
+                document.body.appendChild(modal);
+
+            } catch (e) {
+                console.error('Failed to load scan details:', e);
+                showToast('Failed to load scan details: ' + e.message, 'error');
+            }
+        }
+
+        // ============================================
+        // Scan Wizard
+        // ============================================
+
+        // File browser state
+        let browserCurrentPath = '/app/targets';
+        let browserParentPath = null;
+
+        function setPathSourceType(type) {
+            document.querySelectorAll('#pathForm .targets-tab').forEach(t => t.classList.remove('active'));
+            event.currentTarget.classList.add('active');
+
+            document.getElementById('localPathSection').style.display = type === 'local' ? 'block' : 'none';
+            document.getElementById('githubPathSection').style.display = type === 'github' ? 'block' : 'none';
+            wizardState.pathSourceType = type;
+        }
+
+        async function openFileBrowser() {
+            document.getElementById('fileBrowserPanel').style.display = 'block';
+            await loadBrowserDirectory('/app/targets');
+        }
+
+        function closeFileBrowser() {
+            document.getElementById('fileBrowserPanel').style.display = 'none';
+        }
+
+        async function loadBrowserDirectory(path) {
+            const entriesDiv = document.getElementById('browserEntries');
+            entriesDiv.innerHTML = '<div class="text-muted" style="padding: 1rem;">Loading...</div>';
+
+            try {
+                const res = await fetch(`${API_BASE}/browse?path=${encodeURIComponent(path)}`, {
+                    headers: getAuthHeaders()
+                });
+
+                if (!res.ok) {
+                    const err = await res.json();
+                    throw new Error(err.detail || 'Failed to browse');
+                }
+
+                const data = await res.json();
+                browserCurrentPath = data.current_path;
+                browserParentPath = data.parent_path;
+
+                document.getElementById('browserCurrentPath').textContent = data.current_path;
+                document.getElementById('browserUpButton').style.display = data.parent_path ? 'block' : 'none';
+
+                if (data.entries.length === 0) {
+                    entriesDiv.innerHTML = '<div class="text-muted" style="padding: 1rem;">Empty directory</div>';
+                    return;
+                }
+
+                entriesDiv.innerHTML = data.entries.map(e => `
+                    <div class="browser-entry ${e.is_dir ? 'is-dir' : ''}" onclick="${e.is_dir ? `loadBrowserDirectory('${escapeHtml(e.path)}')` : ''}">
+                        <span class="browser-entry-icon">${e.is_dir ? '📁' : getFileIcon(e.extension)}</span>
+                        <span class="browser-entry-name">${escapeHtml(e.name)}</span>
+                        <span class="browser-entry-size">${e.is_dir ? '' : formatFileSize(e.size)}</span>
+                    </div>
+                `).join('');
+
+            } catch (e) {
+                entriesDiv.innerHTML = `<div class="text-muted" style="padding: 1rem; color: var(--error);">Error: ${escapeHtml(e.message)}</div>`;
+            }
+        }
+
+        function browserGoUp() {
+            if (browserParentPath) {
+                loadBrowserDirectory(browserParentPath);
+            }
+        }
+
+        function selectBrowserPath() {
+            document.getElementById('targetPath').value = browserCurrentPath;
+            closeFileBrowser();
+        }
+
+        function getFileIcon(ext) {
+            const icons = {
+                '.py': '🐍', '.js': '📜', '.ts': '📘', '.json': '📋',
+                '.yaml': '⚙️', '.yml': '⚙️', '.md': '📝', '.txt': '📄',
+                '.gguf': '🧠', '.onnx': '🧠', '.safetensors': '🧠'
+            };
+            return icons[ext] || '📄';
+        }
+
+        function formatFileSize(bytes) {
+            if (bytes === 0) return '';
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+            if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+            return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
+        }
+
+        function selectTargetType(type) {
+            wizardState.targetType = type;
+            document.querySelectorAll('.target-type-card').forEach(c => c.classList.remove('selected'));
+            event.currentTarget.classList.add('selected');
+
+            const formSection = document.getElementById('targetFormSection');
+            formSection.style.display = 'block';
+
+            // Hide all forms
+            document.getElementById('pathForm').style.display = 'none';
+            document.getElementById('modelEndpointForm').style.display = 'none';
+            document.getElementById('agentEndpointForm').style.display = 'none';
+
+            // Show relevant form
+            if (type === 'deployment' || type === 'model_file') {
+                document.getElementById('pathForm').style.display = 'block';
+            } else if (type === 'model_endpoint') {
+                document.getElementById('modelEndpointForm').style.display = 'block';
+            } else if (type === 'agent_endpoint') {
+                document.getElementById('agentEndpointForm').style.display = 'block';
+            }
+
+            document.getElementById('step1Next').disabled = false;
+        }
+
+        function selectProfile(profile) {
+            wizardState.profile = profile;
+            document.querySelectorAll('.profile-card').forEach(c => c.classList.remove('selected'));
+            event.currentTarget.classList.add('selected');
+        }
+
+        function goToStep(step) {
+            // Skip discovery for non-file targets
+            if (step === 2 && (wizardState.targetType === 'model_endpoint' || wizardState.targetType === 'agent_endpoint')) {
+                step = 3;
+            }
+
+            wizardState.step = step;
+
+            // Update progress
+            document.querySelectorAll('.wizard-step').forEach(s => {
+                const sNum = parseInt(s.dataset.step);
+                s.classList.remove('active', 'completed');
+                if (sNum < step) s.classList.add('completed');
+                if (sNum === step) s.classList.add('active');
+            });
+
+            // Show panel
+            document.querySelectorAll('.wizard-panel').forEach(p => p.classList.remove('active'));
+            document.querySelector(`.wizard-panel[data-panel="${step}"]`).classList.add('active');
+
+            // Run discovery when entering step 2
+            if (step === 2) runDiscovery();
+            // Populate review when entering step 4
+            if (step === 4) populateReview();
+        }
+
+        async function runDiscovery() {
+            const path = document.getElementById('targetPath').value;
+            if (!path) {
+                showToast('Please enter a target path or GitHub URL', 'error');
+                return;
+            }
+
+            // Show loading state
+            const discPanel = document.getElementById('wizardStep2');
+            const loadingHtml = `
+                <div class="discovery-loading" style="text-align: center; padding: 3rem;">
+                    <div class="loading-spinner" style="width: 40px; height: 40px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 1s linear infinite; margin: 0 auto 1rem;"></div>
+                    <p style="color: var(--text-secondary);">
+                        ${path.includes('github.com') ? 'Cloning repository...' : 'Scanning directory...'}
+                    </p>
+                    <p style="color: var(--text-muted); font-size: 0.875rem;">This may take a moment for large projects</p>
+                </div>
+            `;
+            const originalContent = discPanel.innerHTML;
+
+            try {
+                // Show loading
+                discPanel.innerHTML = loadingHtml;
+
+                const res = await fetch(`${API_BASE}/discover`, {
+                    method: 'POST',
+                    headers: getAuthHeaders(),
+                    body: JSON.stringify({ path, include_dependencies: true })
+                });
+
+                // Restore original content before processing
+                discPanel.innerHTML = originalContent;
+
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    const detail = err.detail || 'Discovery failed';
+                    showToast(detail, 'error');
+                    // Show help for common errors
+                    if (detail.includes('not accessible') || detail.includes('not found')) {
+                        showDiscoveryHelp();
+                    }
+                    return;
+                }
+
+                const data = await res.json();
+                wizardState.discoveryData = data;
+
+                document.getElementById('discTotalFiles').textContent = data.total_files || 0;
+                document.getElementById('discComponents').textContent = data.total_components || 0;
+                document.getElementById('discFrameworks').textContent = (data.ai_frameworks || []).length;
+
+                if (data.recommendation) {
+                    document.getElementById('recommendationBanner').style.display = 'block';
+                    document.getElementById('recommendedProfile').textContent = data.recommendation.recommended_profile;
+                    document.getElementById('recommendationReason').textContent = data.recommendation.reason;
+                }
+
+                // Populate component types
+                const grid = document.getElementById('componentTypeGrid');
+                const types = data.components_by_type || {};
+                if (Object.keys(types).length > 0) {
+                    grid.innerHTML = Object.entries(types).map(([type, count]) => `
+                        <label class="agent-checkbox">
+                            <input type="checkbox" checked data-type="${type}">
+                            <div class="agent-info">
+                                <div class="agent-name">${type}</div>
+                                <div class="agent-category">${count} files</div>
+                            </div>
+                        </label>
+                    `).join('');
+                } else {
+                    grid.innerHTML = '<p style="color: var(--text-muted);">No components detected</p>';
+                }
+
+                showToast('Discovery complete!', 'success');
+
+            } catch (e) {
+                discPanel.innerHTML = originalContent;
+                showToast('Discovery failed: ' + e.message, 'error');
+            }
+        }
+
+        function showDiscoveryHelp() {
+            const helpModal = document.createElement('div');
+            helpModal.className = 'modal-overlay';
+            helpModal.style.display = 'flex';
+            helpModal.innerHTML = `
+                <div class="modal" style="max-width: 500px;">
+                    <div class="modal-header">
+                        <h3>How to Add Scan Targets</h3>
+                        <button class="modal-close" onclick="this.closest('.modal-overlay').remove()">&times;</button>
+                    </div>
+                    <div class="modal-body" style="text-align: left;">
+                        <h4 style="margin-top: 0;">Option 1: GitHub URL (Recommended)</h4>
+                        <p>Enter a GitHub repository URL:</p>
+                        <code style="display: block; padding: 0.5rem; background: var(--bg-primary); border-radius: 4px; margin-bottom: 1rem;">
+                            https://github.com/owner/repository
+                        </code>
+                        <p style="color: var(--text-muted); font-size: 0.875rem;">The repository will be cloned automatically.</p>
+
+                        <h4>Option 2: Mount Local Directory</h4>
+                        <p>Add a volume mount in docker-compose.yml:</p>
+                        <code style="display: block; padding: 0.5rem; background: var(--bg-primary); border-radius: 4px; font-size: 0.8rem;">
+                            volumes:<br>
+                            &nbsp;&nbsp;- /path/to/your/project:/app/targets/myproject
+                        </code>
+                        <p style="color: var(--text-muted); font-size: 0.875rem; margin-top: 0.5rem;">Then restart containers with: docker compose up -d</p>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(helpModal);
+        }
+
+        function populateReview() {
+            const summary = document.getElementById('reviewSummary');
+            const type = wizardState.targetType;
+            const profile = wizardState.profile;
+
+            let targetInfo = '';
+            if (type === 'deployment' || type === 'model_file') {
+                targetInfo = `<strong>Path:</strong> ${escapeHtml(document.getElementById('targetPath').value)}`;
+            } else if (type === 'model_endpoint') {
+                const provider = document.getElementById('modelProvider').value;
+                const model = document.getElementById('modelName').value;
+                targetInfo = `<strong>Model:</strong> ${escapeHtml(provider)}/${escapeHtml(model)}`;
+            } else if (type === 'agent_endpoint') {
+                const url = document.getElementById('agentUrl').value;
+                targetInfo = `<strong>Agent:</strong> ${escapeHtml(url)}`;
+            }
+
+            summary.innerHTML = `
+                <div style="display: grid; gap: 1rem; grid-template-columns: 1fr 1fr;">
+                    <div class="stat-card">
+                        <div class="stat-label">Target Type</div>
+                        <div style="font-size: 1.25rem; font-weight: 600; margin-top: 0.5rem;">${type.replace('_', ' ')}</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Profile</div>
+                        <div style="font-size: 1.25rem; font-weight: 600; margin-top: 0.5rem;">${profile}</div>
+                    </div>
+                </div>
+                <div class="mt-2" style="background: var(--bg-primary); padding: 1rem; border-radius: 8px;">
+                    ${targetInfo}
+                </div>
+            `;
+        }
+
+        async function launchScan() {
+            const payload = buildScanPayload();
+
+            try {
+                const res = await fetch(`${API_BASE}/scan-targets`, {
+                    method: 'POST',
+                    headers: getAuthHeaders(),
+                    body: JSON.stringify(payload)
+                });
+
+                if (!res.ok) throw new Error('Failed to start scan');
+                const data = await res.json();
+                showToast('Scan started! ID: ' + data.scan_id, 'success');
+                showTab('dashboard');
+            } catch (e) {
+                showToast('Failed to start scan: ' + e.message, 'error');
+            }
+        }
+
+        function buildScanPayload() {
+            const type = wizardState.targetType;
+            const payload = {
+                name: 'Scan ' + new Date().toISOString().slice(0, 16),
+                target_type: type,
+                profile: wizardState.profile,
+                auto_scan: true
+            };
+
+            if (type === 'deployment' || type === 'model_file') {
+                if (wizardState.pathSourceType === 'github') {
+                    payload.github_url = document.getElementById('githubUrl').value;
+                    payload.github_branch = document.getElementById('githubBranch').value || 'main';
+                } else {
+                    payload.source_path = document.getElementById('targetPath').value;
+                }
+            } else if (type === 'model_endpoint') {
+                payload.model_provider = document.getElementById('modelProvider').value;
+                payload.model_name = document.getElementById('modelName').value;
+                payload.model_endpoint = document.getElementById('modelEndpoint').value;
+                payload.model_api_key = document.getElementById('modelApiKey').value;
+                payload.system_prompt = document.getElementById('modelSystemPrompt').value;
+            } else if (type === 'agent_endpoint') {
+                payload.agent_url = document.getElementById('agentUrl').value;
+                payload.agent_protocol = document.getElementById('agentProtocol').value;
+                payload.agent_auth_type = document.getElementById('agentAuthType').value;
+                payload.agent_auth_token = document.getElementById('agentAuthToken').value;
+            }
+
+            return payload;
+        }
+
+        // ============================================
+        // Interrogation
+        // ============================================
+        async function loadOllamaModels(role) {
+            const listId = role === 'source' ? 'sourceModelList' : 'destModelList';
+            const list = document.getElementById(listId);
+
+            try {
+                const res = await fetch(`${INT_API}/models`, { headers: getAuthHeaders() });
+                if (!res.ok) throw new Error('Failed to load models');
+                const data = await res.json();
+
+                const instance = role === 'source' ? 'source' : 'destination';
+                const models = data.filter(m => m.instance === instance);
+
+                if (!models.length) {
+                    list.innerHTML = '<div class="text-muted" style="padding: 1rem;">No models found</div>';
+                    return;
+                }
+
+                list.innerHTML = models.map(m => `
+                    <div class="model-item" onclick="selectOllamaModel('${role}', '${escapeHtml(m.name)}')">
+                        <span>${escapeHtml(m.name)}</span>
+                        <span class="model-size">${m.size}</span>
+                    </div>
+                `).join('');
+            } catch (e) {
+                list.innerHTML = '<div class="text-muted" style="padding: 1rem;">Failed to load</div>';
+            }
+        }
+
+        function selectOllamaModel(role, name) {
+            const inputId = role === 'source' ? 'sourceModel' : 'destModel';
+            document.getElementById(inputId).value = name;
+
+            const listId = role === 'source' ? 'sourceModelList' : 'destModelList';
+            document.querySelectorAll(`#${listId} .model-item`).forEach(item => {
+                item.classList.toggle('selected', item.textContent.includes(name));
+            });
+        }
+
+        async function loadAgents() {
+            const grid = document.getElementById('agentGrid');
+            try {
+                const res = await fetch(`${INT_API}/agents`, { headers: getAuthHeaders() });
+                if (!res.ok) throw new Error('Failed to load agents');
+                const data = await res.json();
+
+                grid.innerHTML = data.map(a => `
+                    <label class="agent-checkbox">
+                        <input type="checkbox" checked data-agent="${escapeHtml(a.name)}">
+                        <div class="agent-info">
+                            <div class="agent-name">${escapeHtml(a.name)}</div>
+                            <div class="agent-category">${escapeHtml(a.category)} • ${a.strategies.length} strategies</div>
+                        </div>
+                    </label>
+                `).join('');
+            } catch (e) {
+                grid.innerHTML = '<div class="text-muted">Failed to load agents</div>';
+            }
+        }
+
+        async function loadInterrogationJobs() {
+            const list = document.getElementById('jobsList');
+            try {
+                const res = await fetch(`${INT_API}/jobs`, { headers: getAuthHeaders() });
+                if (!res.ok) throw new Error('Failed to load jobs');
+                const data = await res.json();
+
+                if (!data.length) {
+                    list.innerHTML = '<div class="text-muted">No jobs yet</div>';
+                    return;
+                }
+
+                list.innerHTML = data.map(j => `
+                    <div class="job-item ${selectedJob === j.job_id ? 'active' : ''}" onclick="viewInterrogationJob('${j.job_id}')">
+                        <div class="job-header">
+                            <span class="job-models mono" style="font-size: 0.75rem;">${escapeHtml(j.attacker_model)} → ${escapeHtml(j.target_model)}</span>
+                            ${statusBadge(j.status)}
+                        </div>
+                        <div class="job-meta">
+                            ${j.successful_attacks || 0} successful / ${j.strategies_run || 0} strategies • ${formatDuration(j.duration_seconds)}
+                        </div>
+                    </div>
+                `).join('');
+            } catch (e) {
+                list.innerHTML = '<div class="text-muted">Failed to load jobs</div>';
+            }
+        }
+
+        async function viewInterrogationJob(jobId) {
+            selectedJob = jobId;
+            loadInterrogationJobs(); // Refresh to show active state
+
+            try {
+                const res = await fetch(`${INT_API}/jobs/${jobId}`, { headers: getAuthHeaders() });
+                if (!res.ok) throw new Error('Failed to load job');
+                const data = await res.json();
+
+                const card = document.getElementById('transcriptCard');
+                const container = document.getElementById('transcriptContainer');
+
+                if (!data.conversations || !data.conversations.length) {
+                    card.style.display = 'block';
+                    container.innerHTML = '<div class="text-muted">No conversations recorded yet</div>';
+                    return;
+                }
+
+                card.style.display = 'block';
+                document.getElementById('transcriptStrategy').textContent = data.conversations[0]?.strategy || '';
+
+                // Show first conversation's turns
+                const conv = data.conversations[0];
+                container.innerHTML = (conv.turns || []).map(t => {
+                    const roleClass = t.role === 'attacker' ? 'attacker' : t.role === 'evaluator' ? 'evaluator' : 'target';
+                    return `
+                        <div class="transcript-turn ${roleClass}">
+                            <div class="turn-header">
+                                <span class="turn-role ${roleClass}">${t.role} (Turn ${t.turn_number})</span>
+                                <span class="turn-meta">${t.model || ''} • ${t.latency_ms?.toFixed(0) || 0}ms</span>
+                            </div>
+                            <div class="turn-content">${escapeHtml(t.content)}</div>
+                        </div>
+                    `;
+                }).join('');
+
+            } catch (e) {
+                showToast('Failed to load job: ' + e.message, 'error');
+            }
+        }
+
+        async function startInterrogation() {
+            const sourceProvider = document.getElementById('sourceProvider').value;
+            const sourceModel = document.getElementById('sourceModel').value;
+            const destProvider = document.getElementById('destProvider').value;
+            const destModel = document.getElementById('destModel').value;
+            const systemPrompt = document.getElementById('destSystemPrompt').value;
+
+            if (!sourceModel || !destModel) {
+                showToast('Please select both source and destination models', 'error');
+                return;
+            }
+
+            const selectedAgents = [];
+            document.querySelectorAll('#agentGrid input[type="checkbox"]:checked').forEach(cb => {
+                selectedAgents.push(cb.dataset.agent);
+            });
+
+            const payload = {
+                attacker: { provider: sourceProvider, model: sourceModel },
+                target: { provider: destProvider, model: destModel },
+                target_system_prompt: systemPrompt || null,
+                agent_names: selectedAgents.length ? selectedAgents : null,
+                max_turns: 8
+            };
+
+            try {
+                const res = await fetch(`${INT_API}/jobs`, {
+                    method: 'POST',
+                    headers: getAuthHeaders(),
+                    body: JSON.stringify(payload)
+                });
+
+                if (!res.ok) throw new Error('Failed to start interrogation');
+                const data = await res.json();
+                showToast('Interrogation started! Job ID: ' + data.job_id, 'success');
+                loadInterrogationJobs();
+            } catch (e) {
+                showToast('Failed to start: ' + e.message, 'error');
+            }
+        }
+
+        // ============================================
+        // Targets
+        // ============================================
+        function showTargetsTab(tab) {
+            document.querySelectorAll('.targets-tab').forEach(t => t.classList.remove('active'));
+            event.currentTarget.classList.add('active');
+
+            document.getElementById('modelsTargetPanel').style.display = tab === 'models' ? 'block' : 'none';
+            document.getElementById('agentsTargetPanel').style.display = tab === 'agents' ? 'block' : 'none';
+            document.getElementById('gatewaysTargetPanel').style.display = tab === 'gateways' ? 'block' : 'none';
+        }
+
+        async function loadTargets() {
+            // Load from localStorage for now (would be API in production)
+            targets = JSON.parse(localStorage.getItem('mass_targets') || '{"models":[],"agents":[],"gateways":[]}');
+            renderTargets();
+        }
+
+        function renderTargets() {
+            // Models
+            const modelsBody = document.getElementById('modelTargetsBody');
+            if (targets.models.length) {
+                modelsBody.innerHTML = targets.models.map((m, i) => `
+                    <tr>
+                        <td>${escapeHtml(m.provider)}</td>
+                        <td class="mono">${escapeHtml(m.model)}</td>
+                        <td class="mono text-muted" style="font-size: 0.75rem;">${escapeHtml(m.endpoint || 'Default')}</td>
+                        <td>${m.lastTested || 'Never'}</td>
+                        <td>
+                            <span class="health-indicator">
+                                <span class="health-dot ${m.health || 'unknown'}"></span>
+                                ${m.health || 'Unknown'}
+                            </span>
+                        </td>
+                        <td>
+                            <button class="btn btn-secondary btn-sm" onclick="testTarget('model', ${i})">Test</button>
+                            <button class="btn btn-secondary btn-sm" onclick="interrogateTarget(${i})">Interrogate</button>
+                        </td>
+                    </tr>
+                `).join('');
+            } else {
+                modelsBody.innerHTML = '<tr><td colspan="6" class="text-muted">No model endpoints configured</td></tr>';
+            }
+
+            // Agents
+            const agentsBody = document.getElementById('agentTargetsBody');
+            if (targets.agents.length) {
+                agentsBody.innerHTML = targets.agents.map((a, i) => `
+                    <tr>
+                        <td>${escapeHtml(a.name)}</td>
+                        <td class="mono" style="font-size: 0.75rem;">${escapeHtml(a.url)}</td>
+                        <td>${escapeHtml(a.protocol)}</td>
+                        <td>${a.lastTested || 'Never'}</td>
+                        <td>
+                            <span class="health-indicator">
+                                <span class="health-dot ${a.health || 'unknown'}"></span>
+                                ${a.health || 'Unknown'}
+                            </span>
+                        </td>
+                        <td>
+                            <button class="btn btn-secondary btn-sm" onclick="testTarget('agent', ${i})">Test</button>
+                        </td>
+                    </tr>
+                `).join('');
+            } else {
+                agentsBody.innerHTML = '<tr><td colspan="6" class="text-muted">No agent endpoints configured</td></tr>';
+            }
+
+            // Gateways
+            const gatewaysBody = document.getElementById('gatewayTargetsBody');
+            if (targets.gateways.length) {
+                gatewaysBody.innerHTML = targets.gateways.map((g, i) => `
+                    <tr>
+                        <td>${escapeHtml(g.name)}</td>
+                        <td>${escapeHtml(g.type)}</td>
+                        <td class="mono" style="font-size: 0.75rem;">${escapeHtml(g.endpoint)}</td>
+                        <td>${g.modelsCount || 0}</td>
+                        <td>
+                            <span class="health-indicator">
+                                <span class="health-dot ${g.health || 'unknown'}"></span>
+                                ${g.health || 'Unknown'}
+                            </span>
+                        </td>
+                        <td>
+                            <button class="btn btn-secondary btn-sm" onclick="discoverGatewayModels(${i})">Discover</button>
+                            <button class="btn btn-secondary btn-sm" onclick="testTarget('gateway', ${i})">Test</button>
+                        </td>
+                    </tr>
+                `).join('');
+            } else {
+                gatewaysBody.innerHTML = '<tr><td colspan="6" class="text-muted">No API gateways configured</td></tr>';
+            }
+        }
+
+        function refreshTargets() {
+            loadTargets();
+            showToast('Targets refreshed', 'success');
+        }
+
+        function showAddTargetModal() {
+            document.getElementById('addTargetModal').classList.add('active');
+        }
+
+        function hideModal(id) {
+            document.getElementById(id).classList.remove('active');
+        }
+
+        function toggleAddTargetForm() {
+            const type = document.getElementById('addTargetType').value;
+            document.getElementById('addModelFields').style.display = type === 'model' ? 'block' : 'none';
+            document.getElementById('addAgentFields').style.display = type === 'agent' ? 'block' : 'none';
+            document.getElementById('addGatewayFields').style.display = type === 'gateway' ? 'block' : 'none';
+        }
+
+        function saveTarget() {
+            const type = document.getElementById('addTargetType').value;
+
+            if (type === 'model') {
+                targets.models.push({
+                    provider: document.getElementById('addModelProvider').value,
+                    model: document.getElementById('addModelName').value,
+                    endpoint: document.getElementById('addModelEndpoint').value,
+                    apiKey: document.getElementById('addModelKey').value,
+                    health: 'unknown'
+                });
+            } else if (type === 'agent') {
+                targets.agents.push({
+                    name: document.getElementById('addAgentName').value,
+                    url: document.getElementById('addAgentUrl').value,
+                    protocol: document.getElementById('addAgentProtocol').value,
+                    authToken: document.getElementById('addAgentToken').value,
+                    health: 'unknown'
+                });
+            } else if (type === 'gateway') {
+                targets.gateways.push({
+                    name: document.getElementById('addGatewayName').value,
+                    type: document.getElementById('addGatewayType').value,
+                    endpoint: document.getElementById('addGatewayEndpoint').value,
+                    apiKey: document.getElementById('addGatewayKey').value,
+                    health: 'unknown',
+                    modelsCount: 0
+                });
+            }
+
+            localStorage.setItem('mass_targets', JSON.stringify(targets));
+            hideModal('addTargetModal');
+            renderTargets();
+            showToast('Target added', 'success');
+        }
+
+        async function testTarget(type, index) {
+            showToast('Testing connection...', 'info');
+            // Simulate test - would call API in production
+            setTimeout(() => {
+                if (type === 'model') targets.models[index].health = 'healthy';
+                else if (type === 'agent') targets.agents[index].health = 'healthy';
+                else if (type === 'gateway') targets.gateways[index].health = 'healthy';
+
+                targets[type + 's'][index].lastTested = new Date().toLocaleString();
+                localStorage.setItem('mass_targets', JSON.stringify(targets));
+                renderTargets();
+                showToast('Connection successful', 'success');
+            }, 1000);
+        }
+
+        function interrogateTarget(index) {
+            const model = targets.models[index];
+            showTab('interrogate');
+            document.getElementById('destProvider').value = model.provider;
+            document.getElementById('destModel').value = model.model;
+        }
+
+        async function discoverGatewayModels(index) {
+            const gateway = targets.gateways[index];
+            showToast('Discovering models from ' + gateway.name + '...', 'info');
+
+            // In production, would call gateway's /models endpoint
+            setTimeout(() => {
+                targets.gateways[index].modelsCount = Math.floor(Math.random() * 20) + 5;
+                localStorage.setItem('mass_targets', JSON.stringify(targets));
+                renderTargets();
+                showToast(`Discovered ${targets.gateways[index].modelsCount} models`, 'success');
+            }, 1500);
+        }
+
+        // ============================================
+        // Utilities
+        // ============================================
+        function escapeHtml(str) {
+            if (!str) return '';
+            return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
+
+        function statusBadge(status) {
+            const map = {
+                completed: 'success',
+                running: 'running',
+                pending: 'info',
+                failed: 'error',
+                scanning: 'running'
+            };
+            return `<span class="badge badge-${map[status] || 'info'}">${status}</span>`;
+        }
+
+        function formatDuration(seconds) {
+            if (!seconds) return '-';
+            if (seconds < 60) return `${Math.round(seconds)}s`;
+            if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
+            return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
+        }
+
+        function showToast(message, type = 'info') {
+            const container = document.getElementById('toastContainer');
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.innerHTML = `<span>${escapeHtml(message)}</span>`;
+            container.appendChild(toast);
+            setTimeout(() => toast.remove(), 4000);
+        }
+
+        // ============================================
+        // Init
+        // ============================================
+        document.addEventListener('DOMContentLoaded', () => {
+            // Restore API key
+            if (apiKey) {
+                document.getElementById('apiKeyInput').value = apiKey;
+                connectApiKey();
+            }
+
+            // Load targets from storage
+            loadTargets();
+        });
+    </script>
+</body>
+</html>

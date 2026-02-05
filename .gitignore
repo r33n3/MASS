@@ -202,3 +202,19 @@ charts/*/charts/
 # Claude Code
 .claude/
 ralph-loop.local.md
+
+# Temporary files
+tmp_*
+*.tmp
+nul
+
+# Test output files
+**/findings*.json
+**/dash_test.html
+**/dash_verify.html
+openapi_tmp.json
+
+# Path encoding issues (Windows artifacts)
+C*UsersbradjDevelopmentMASS*
+Usersbradjfindings.json
+UsersbradjDevelopmentMASS*

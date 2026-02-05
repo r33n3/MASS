@@ -1,0 +1,51 @@
+version: '3.8'
+
+# Lightweight setup for quick testing with SQLite
+# No PostgreSQL or Redis required - everything runs in a single container
+
+services:
+  # MASS API Application (Lite Mode)
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: development
+    container_name: mass-api-lite
+    environment:
+      # Python path for module imports
+      PYTHONPATH: /app/src
+
+      # SQLite Database (file-based)
+      MASS_DB_URL: sqlite+aiosqlite:///./data/mass.db
+
+      # In-memory queue (no Redis needed)
+      MASS_QUEUE_PROVIDER: memory
+
+      # No Redis cache
+      # API will work without cache, or use in-memory cache
+
+      # Application settings
+      MASS_ENVIRONMENT: development
+      MASS_DEBUG: "true"
+      MASS_LOG_LEVEL: DEBUG
+
+      # Optional: AI provider keys (if needed for testing)
+      # MASS_OPENAI_API_KEY: ${MASS_OPENAI_API_KEY:-}
+      # MASS_ANTHROPIC_API_KEY: ${MASS_ANTHROPIC_API_KEY:-}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./src:/app/src
+      - ./tests:/app/tests
+      - ./data:/app/data
+    command: >
+      sh -c "
+        echo 'Creating data directory...' &&
+        mkdir -p /app/data &&
+        echo 'Initializing database for SQLite...' &&
+        python /app/scripts/init_db.py &&
+        echo 'Starting MASS API in lite mode...' &&
+        uvicorn mass.api.main:create_app --factory --host 0.0.0.0 --port 8000 --reload
+      "
+
+# No volumes needed for external services since everything is file-based

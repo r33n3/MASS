@@ -3,6 +3,7 @@
 Provides common dependencies for API routes.
 """
 
+from datetime import datetime
 from typing import Annotated, AsyncGenerator
 
 from fastapi import Depends, Header, HTTPException, Request, status
@@ -14,6 +15,7 @@ from mass.storage.repositories.tenant import TenantRepository, UserRepository, A
 from mass.storage.repositories.deployment import DeploymentRepository
 from mass.storage.repositories.scan import ScanRepository
 from mass.storage.repositories.finding import FindingRepository
+from mass.storage.repositories.remediation import RemediationTemplateRepository
 from mass.storage.repositories.report import ReportRepository
 
 
@@ -78,6 +80,14 @@ APIKeyRepo = Annotated[APIKeyRepository, Depends(get_api_key_repository)]
 DeploymentRepo = Annotated[DeploymentRepository, Depends(get_deployment_repository)]
 ScanRepo = Annotated[ScanRepository, Depends(get_scan_repository)]
 FindingRepo = Annotated[FindingRepository, Depends(get_finding_repository)]
+
+
+async def get_remediation_repository(db: DBSession) -> RemediationTemplateRepository:
+    """Get remediation template repository."""
+    return RemediationTemplateRepository(db)
+
+
+RemediationRepo = Annotated[RemediationTemplateRepository, Depends(get_remediation_repository)]
 ReportRepo = Annotated[ReportRepository, Depends(get_report_repository)]
 
 
@@ -138,10 +148,17 @@ async def get_current_tenant(
             detail="Invalid API key",
         )
 
-    if not stored_key.is_valid:
+    if not stored_key.is_active:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="API key is inactive or expired",
+            detail="API key is inactive",
+        )
+
+    # Check if key is expired
+    if stored_key.expires_at and stored_key.expires_at < datetime.now():
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="API key has expired",
         )
 
     # Update usage count
@@ -159,6 +176,52 @@ async def get_current_tenant(
 
 
 CurrentTenantDep = Annotated[CurrentTenant, Depends(get_current_tenant)]
+
+
+async def require_admin(
+    tenant: CurrentTenantDep,
+    db: DBSession,
+) -> CurrentTenant:
+    """Require the authenticated user to be a superuser.
+
+    Looks up the API key's associated user and checks is_superuser.
+    Returns the tenant context if authorized, raises 403 otherwise.
+    """
+    if not tenant.api_key_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required",
+        )
+
+    from mass.storage.models.tenant import APIKey
+    from sqlalchemy import select
+
+    stmt = select(APIKey).where(APIKey.id == tenant.api_key_id)
+    result = await db.execute(stmt)
+    api_key = result.scalar_one_or_none()
+
+    if not api_key:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required",
+        )
+
+    from mass.storage.models.tenant import User
+
+    user_stmt = select(User).where(User.id == api_key.user_id)
+    user_result = await db.execute(user_stmt)
+    user = user_result.scalar_one_or_none()
+
+    if not user or not user.is_superuser:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required",
+        )
+
+    return tenant
+
+
+AdminDep = Annotated[CurrentTenant, Depends(require_admin)]
 
 
 # Optional authentication (for public endpoints that can be enhanced with auth)
@@ -206,3 +269,51 @@ class PaginationParams:
 
 
 PaginationDep = Annotated[PaginationParams, Depends()]
+
+
+# Scan queue for dispatching scans to workers
+import logging
+
+_scan_queue_logger = logging.getLogger(__name__)
+_scan_queue = None
+
+
+async def get_scan_queue():
+    """Get or create the Redis scan queue for dispatching scans to workers.
+
+    Returns None if Redis is unavailable (caller should fall back to
+    in-process execution).
+    """
+    global _scan_queue
+    if _scan_queue is not None:
+        return _scan_queue
+
+    try:
+        from mass.workers.queue import QueueConfig, RedisQueue
+
+        settings = get_settings()
+        config = QueueConfig(
+            backend="redis",
+            redis_url=settings.redis.url,
+            redis_prefix="mass:scans:",
+        )
+        queue = RedisQueue(config)
+        # Verify connectivity
+        redis = await queue._get_redis()
+        await redis.ping()
+        _scan_queue = queue
+        return _scan_queue
+    except Exception as e:
+        _scan_queue_logger.warning("Redis scan queue unavailable: %s", e)
+        return None
+
+
+async def close_scan_queue() -> None:
+    """Close the scan queue Redis connection."""
+    global _scan_queue
+    if _scan_queue is not None:
+        try:
+            await _scan_queue.close()
+        except Exception:
+            pass
+        _scan_queue = None

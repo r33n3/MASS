@@ -10,6 +10,11 @@ from mass.api.routes import (
     reports,
     webhooks,
     admin,
+    discovery,
+    dashboard,
+    remediations,
+    scan_targets,
+    interrogation,
 )
 
 __all__ = [
@@ -22,4 +27,9 @@ __all__ = [
     "reports",
     "webhooks",
     "admin",
+    "discovery",
+    "dashboard",
+    "remediations",
+    "scan_targets",
+    "interrogation",
 ]

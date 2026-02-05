@@ -1,0 +1,288 @@
+version: '3.8'
+
+services:
+  # ============================================
+  # Infrastructure
+  # ============================================
+
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: mass-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-mass}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mass}
+      POSTGRES_DB: ${POSTGRES_DB:-mass}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mass"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - mass-network
+
+  # Redis Cache & Queue (AOF persistence + memory limits)
+  redis:
+    image: redis:7-alpine
+    container_name: mass-redis
+    command: >
+      redis-server
+        --appendonly yes
+        --appendfsync everysec
+        --maxmemory 256mb
+        --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - mass-network
+
+  # ============================================
+  # Reverse Proxy (entry point)
+  # ============================================
+
+  proxy:
+    build:
+      context: .
+      dockerfile: docker/proxy/Dockerfile
+    container_name: mass-proxy
+    ports:
+      - "80:80"
+    depends_on:
+      api:
+        condition: service_started
+      ui:
+        condition: service_started
+    networks:
+      - mass-network
+    restart: unless-stopped
+
+  # ============================================
+  # Application Services
+  # ============================================
+
+  # MASS API (REST + WebSocket only, no UI serving)
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: development
+    container_name: mass-api
+    env_file:
+      - .env
+    environment:
+      PYTHONPATH: /app/src
+      MASS_DB_URL: postgresql+asyncpg://mass:mass@postgres:5432/mass
+      MASS_REDIS_URL: redis://redis:6379/0
+      MASS_DB_POOL_SIZE: "15"
+      MASS_DB_MAX_OVERFLOW: "30"
+      MASS_ENVIRONMENT: development
+      MASS_DEBUG: "true"
+      OLLAMA_HOST: http://ollama:11434
+      OLLAMA_ATTACKER_HOST: http://ollama-attacker:11434
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./src:/app/src
+      - ./tests:/app/tests
+      - ./data:/app/data
+      - ./scripts:/app/scripts
+      - C:/Users/bradj/Development/aDiOS:/app/targets/aDiOS:ro
+      - C:/Users/bradj/Development/BenderBox:/app/targets/BenderBox:ro
+      - github_clones:/app/targets/_github_clones
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - mass-network
+    command: >
+      sh -c "
+        echo 'Waiting for database...' &&
+        sleep 5 &&
+        echo 'Initializing database schema...' &&
+        python /app/scripts/init_db_postgres.py &&
+        echo 'Starting MASS API...' &&
+        uvicorn mass.api.main:create_app --factory --host 0.0.0.0 --port 8000 --reload
+      "
+
+  # MASS Dashboard UI (static nginx)
+  ui:
+    build:
+      context: .
+      dockerfile: docker/ui/Dockerfile
+    container_name: mass-ui
+    volumes:
+      # Dev mount: live-reload static files without rebuilding
+      - ./src/mass/dashboard/static:/usr/share/nginx/html:ro
+    networks:
+      - mass-network
+    restart: unless-stopped
+
+  # Worker for background scan processing
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: development
+    env_file:
+      - .env
+    environment:
+      PYTHONPATH: /app/src
+      MASS_DB_URL: postgresql+asyncpg://mass:mass@postgres:5432/mass
+      MASS_REDIS_URL: redis://redis:6379/0
+      MASS_WORKER_CONCURRENCY: "5"
+      MASS_WORKER_QUEUES: "scans"
+      MASS_DB_POOL_SIZE: "15"
+      MASS_DB_MAX_OVERFLOW: "30"
+      OLLAMA_HOST: http://ollama:11434
+      OLLAMA_ATTACKER_HOST: http://ollama-attacker:11434
+    volumes:
+      - ./src:/app/src
+      - ./data:/app/data
+      - C:/Users/bradj/Development/aDiOS:/app/targets/aDiOS:ro
+      - C:/Users/bradj/Development/BenderBox:/app/targets/BenderBox:ro
+      - github_clones:/app/targets/_github_clones
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - mass-network
+    command: python -m mass.workers.scan_worker
+    deploy:
+      replicas: 2
+
+  # ============================================
+  # Ollama — Local LLMs for interrogation
+  # Two instances: one for attacker model, one for target model
+  # This prevents model-swap thrashing when both are 8B+
+  # ============================================
+
+  # Ollama instance for DESTINATION models (victim / interrogatee)
+  ollama:
+    image: ollama/ollama
+    container_name: mass-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - mass-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:11434/api/tags || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # Ollama instance for SOURCE models (interrogator / attacker)
+  ollama-attacker:
+    image: ollama/ollama
+    container_name: mass-ollama-attacker
+    ports:
+      - "11435:11434"
+    volumes:
+      - ollama_attacker_data:/root/.ollama
+    networks:
+      - mass-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:11434/api/tags || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # ============================================
+  # Optional Tools (activate with --profile tools)
+  # ============================================
+
+  # Database Migration Tool
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: development
+    container_name: mass-migrate
+    env_file:
+      - .env
+    environment:
+      MASS_DB_URL: postgresql+asyncpg://mass:mass@postgres:5432/mass
+    volumes:
+      - ./src:/app/src
+      - ./alembic.ini:/app/alembic.ini
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - mass-network
+    profiles:
+      - tools
+    command: alembic upgrade head
+
+  # pgAdmin (Database Management UI)
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: mass-pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@mass.local
+      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      - postgres
+    networks:
+      - mass-network
+    profiles:
+      - tools
+
+  # Redis Commander (Redis Management UI)
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: mass-redis-commander
+    environment:
+      REDIS_HOSTS: local:redis:6379
+    ports:
+      - "8081:8081"
+    depends_on:
+      - redis
+    networks:
+      - mass-network
+    profiles:
+      - tools
+
+networks:
+  mass-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  pgadmin_data:
+    driver: local
+  ollama_data:
+    driver: local
+  ollama_attacker_data:
+    driver: local
+  github_clones:
+    driver: local

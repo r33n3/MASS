@@ -13,6 +13,13 @@ from mass.detectors.base import (
     list_detectors,
 )
 
+# Import detectors to trigger registration
+import mass.detectors.keyword  # noqa: F401
+import mass.detectors.refusal  # noqa: F401
+import mass.detectors.system_prompt  # noqa: F401
+import mass.detectors.pii  # noqa: F401
+import mass.detectors.instruction_following  # noqa: F401
+
 __all__ = [
     "BaseDetector",
     "DetectionResult",

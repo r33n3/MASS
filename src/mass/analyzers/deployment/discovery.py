@@ -26,31 +26,36 @@ class ComponentDiscovery:
     - Infrastructure files
     """
 
-    # Default patterns to ignore
+    # Default patterns to ignore (file name patterns)
     IGNORE_PATTERNS = [
-        "__pycache__",
         "*.pyc",
-        ".git",
-        ".svn",
-        ".hg",
-        "node_modules",
-        ".venv",
-        "venv",
         ".env.local",
         "*.egg-info",
-        "dist",
-        "build",
-        ".pytest_cache",
-        ".mypy_cache",
-        ".ruff_cache",
-        "coverage",
-        ".coverage",
-        "htmlcov",
         "*.log",
         "*.tmp",
         ".DS_Store",
         "Thumbs.db",
     ]
+
+    # Directories to skip entirely during traversal.
+    # Using os.walk with topdown=True these are pruned so we never
+    # descend into them (unlike rglob which traverses everything).
+    IGNORE_DIRS = {
+        ".git", ".svn", ".hg",
+        "__pycache__", "node_modules",
+        ".venv", "venv", "env",
+        ".tox", ".mypy_cache", ".pytest_cache", ".ruff_cache",
+        "build", "dist", "eggs",
+        "coverage", ".coverage", "htmlcov",
+        # Native/compiled ML runtimes (not the model files themselves)
+        "llama.cpp", "sd.cpp", "whisper.cpp",
+        # Binary/compiled output
+        "bin", "obj", "target", "out",
+        # Vendored/downloaded dependencies
+        "vendor", "third_party", "external",
+        # Large framework directories
+        "framepack_cu126_torch26",
+    }
 
     # File patterns for different component types
     COMPONENT_PATTERNS = {
@@ -164,52 +169,46 @@ class ComponentDiscovery:
         return components, dependencies
 
     def _walk_directory(self, path: Path):
-        """Walk directory yielding files that should be processed."""
-        for item in path.rglob("*"):
-            # Skip directories
-            if item.is_dir():
-                continue
+        """Walk directory yielding files that should be processed.
 
-            # Check if should be ignored
-            if self._should_ignore(item, path):
-                continue
+        Uses os.walk with topdown=True to prune excluded directories
+        in-place, avoiding traversal of large subtrees like llama.cpp,
+        node_modules, etc.
+        """
+        import os
 
-            # Check file size
-            try:
-                if item.stat().st_size > self.max_file_size:
-                    logger.debug(f"Skipping large file: {item}")
+        for dirpath, dirnames, filenames in os.walk(str(path), topdown=True):
+            # Prune excluded directories IN PLACE so os.walk skips them
+            dirnames[:] = [
+                d for d in dirnames
+                if d not in self.IGNORE_DIRS and not d.endswith(".egg-info")
+            ]
+
+            for filename in filenames:
+                file_path = Path(dirpath) / filename
+
+                # Check filename ignore patterns
+                if self._should_ignore_file(filename):
                     continue
-            except OSError:
-                continue
 
-            yield item
+                # Check file size
+                try:
+                    if file_path.stat().st_size > self.max_file_size:
+                        continue
+                except OSError:
+                    continue
 
-    def _should_ignore(self, file_path: Path, base_path: Path) -> bool:
-        """Check if a file should be ignored."""
-        try:
-            relative = file_path.relative_to(base_path)
-        except ValueError:
-            relative = file_path
+                yield file_path
 
-        relative_str = str(relative)
-        name = file_path.name
+    def _should_ignore_file(self, filename: str) -> bool:
+        """Check if a file should be ignored based on its name.
 
+        Directory-level exclusion is handled by _walk_directory via
+        IGNORE_DIRS pruning.  This method only checks filename patterns.
+        """
         for pattern in self.ignore_patterns:
-            # Check against full relative path
-            if fnmatch.fnmatch(relative_str, pattern):
+            if fnmatch.fnmatch(filename, pattern):
                 return True
-            if fnmatch.fnmatch(relative_str, f"**/{pattern}"):
-                return True
-
-            # Check against filename only
-            if fnmatch.fnmatch(name, pattern):
-                return True
-
-            # Check if any parent directory matches
-            for parent in relative.parents:
-                if fnmatch.fnmatch(parent.name, pattern):
-                    return True
-
         return False
 
     def _determine_component_type(self, file_path: Path) -> ComponentType | None:

@@ -31,6 +31,8 @@ class ScanStatusResponse(BaseModel):
     progress_percent: float = Field(..., description="Progress percentage (0-100)")
     current_phase: str | None = Field(default=None, description="Current scan phase")
     status_message: str | None = Field(default=None, description="Status message")
+    jobs_completed: int = Field(default=0, description="Jobs completed so far")
+    jobs_total: int = Field(default=0, description="Total jobs in scan plan")
 
 
 class ScanJobResponse(IDMixin, TimestampMixin):

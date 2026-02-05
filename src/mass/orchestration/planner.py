@@ -150,6 +150,10 @@ class DeploymentInfo:
     has_workflows: bool = False
     has_infrastructure: bool = False
     has_secrets_risk: bool = True  # Always check for secrets
+    has_model_endpoint: bool = False  # Remote model API configured
+
+    # Detected environment (populated after discovery phase)
+    cloud_provider: str | None = None
 
     # Component lists
     model_files: list[str] = field(default_factory=list)
@@ -327,7 +331,8 @@ class ScanPlanner:
             plan.add_job(job)
 
         # 4. Model interrogation (depends on everything else)
-        if self.profile.model_interrogator.enabled and deployment.has_models:
+        # Runs when model files are present OR a remote model endpoint is configured
+        if self.profile.model_interrogator.enabled and (deployment.has_models or deployment.has_model_endpoint):
             all_job_ids = [j.id for j in plan.jobs]
             job = PlannedJob(
                 job_type=JobType.MODEL_INTERROGATION,

@@ -89,7 +89,7 @@ AI_PROVIDER_PATTERNS = [
     ),
     SecretPattern(
         name="cohere_api_key",
-        pattern=r"[a-zA-Z0-9]{40}",
+        pattern=r"(?i)(?:cohere|co[-_]?api)[-_]?(?:key|token)\s*[:=]\s*['\"]?([a-zA-Z0-9]{40})['\"]?",
         category=SecretCategory.AI_PROVIDER,
         severity=Severity.HIGH,
         description="Cohere API Key",
@@ -114,7 +114,7 @@ AI_PROVIDER_PATTERNS = [
     ),
     SecretPattern(
         name="mistral_api_key",
-        pattern=r"[A-Za-z0-9]{32}",
+        pattern=r"(?i)(?:mistral|mist)[-_]?(?:api)?[-_]?(?:key|token)\s*[:=]\s*['\"]?([A-Za-z0-9]{32})['\"]?",
         category=SecretCategory.AI_PROVIDER,
         severity=Severity.HIGH,
         description="Mistral AI API Key",
@@ -123,7 +123,7 @@ AI_PROVIDER_PATTERNS = [
     ),
     SecretPattern(
         name="together_api_key",
-        pattern=r"[a-f0-9]{64}",
+        pattern=r"(?i)(?:together)[-_]?(?:api)?[-_]?(?:key|token)\s*[:=]\s*['\"]?([a-f0-9]{64})['\"]?",
         category=SecretCategory.AI_PROVIDER,
         severity=Severity.HIGH,
         description="Together AI API Key",
@@ -155,7 +155,7 @@ CLOUD_PROVIDER_PATTERNS = [
     ),
     SecretPattern(
         name="aws_secret_key",
-        pattern=r"[A-Za-z0-9/+=]{40}",
+        pattern=r"(?i)(?:aws[_-]?secret[_-]?(?:access[_-]?)?key|secret[_-]?key)\s*[:=]\s*['\"]?([A-Za-z0-9/+=]{40})['\"]?",
         category=SecretCategory.CLOUD_PROVIDER,
         severity=Severity.CRITICAL,
         description="AWS Secret Access Key",
@@ -179,7 +179,7 @@ CLOUD_PROVIDER_PATTERNS = [
     ),
     SecretPattern(
         name="azure_client_secret",
-        pattern=r"[A-Za-z0-9~_\.\-]{34,40}",
+        pattern=r"(?i)(?:azure|client)[-_]?secret\s*[:=]\s*['\"]?([A-Za-z0-9~_.\-]{34,40})['\"]?",
         category=SecretCategory.CLOUD_PROVIDER,
         severity=Severity.HIGH,
         description="Azure Client Secret",
@@ -222,7 +222,7 @@ CLOUD_PROVIDER_PATTERNS = [
     ),
     SecretPattern(
         name="linode_token",
-        pattern=r"[a-f0-9]{64}",
+        pattern=r"(?i)(?:linode)[-_]?(?:api)?[-_]?(?:key|token)\s*[:=]\s*['\"]?([a-f0-9]{64})['\"]?",
         category=SecretCategory.CLOUD_PROVIDER,
         severity=Severity.HIGH,
         description="Linode Personal Access Token",
@@ -286,7 +286,7 @@ VERSION_CONTROL_PATTERNS = [
     ),
     SecretPattern(
         name="bitbucket_app_password",
-        pattern=r"[A-Za-z0-9]{24}",
+        pattern=r"(?i)(?:bitbucket|bb)[-_]?(?:app)?[-_]?(?:password|pass|pwd|token)\s*[:=]\s*['\"]?([A-Za-z0-9]{24})['\"]?",
         category=SecretCategory.VERSION_CONTROL,
         severity=Severity.HIGH,
         description="Bitbucket App Password",
@@ -328,12 +328,18 @@ DATABASE_PATTERNS = [
         description="Redis Connection URI",
     ),
     SecretPattern(
-        name="elasticsearch_uri",
-        pattern=r"https?://[^:]+:[^@]+@[^/]+(?::\d+)?(?:/\S*)?",
+        name="credential_uri",
+        pattern=r"https?://[A-Za-z0-9._~%-]+:[A-Za-z0-9._~!$&'()*+,;=%-]+@[A-Za-z0-9.-]+(?::\d{2,5})?(?:/\S*)?",
         category=SecretCategory.DATABASE,
         severity=Severity.HIGH,
-        description="Elasticsearch Connection URI",
-        false_positive_patterns=[r"https?://example\."],
+        description="URL with Embedded Credentials",
+        false_positive_patterns=[
+            r"https?://example\.",
+            r"https?://user(?:name)?:pass(?:word)?@",
+            r"https?://\$\{",
+            r"https?://<",
+            r"https?://\{\{",
+        ],
     ),
 ]
 
@@ -379,7 +385,7 @@ MESSAGING_PATTERNS = [
     ),
     SecretPattern(
         name="twilio_auth_token",
-        pattern=r"[a-f0-9]{32}",
+        pattern=r"(?i)(?:twilio)[-_]?(?:auth)?[-_]?(?:token|secret)\s*[:=]\s*['\"]?([a-f0-9]{32})['\"]?",
         category=SecretCategory.MESSAGING,
         severity=Severity.HIGH,
         description="Twilio Auth Token",
@@ -429,7 +435,7 @@ PAYMENT_PATTERNS = [
     ),
     SecretPattern(
         name="paypal_client_secret",
-        pattern=r"E[A-Za-z0-9_-]{71}",
+        pattern=r"(?i)(?:paypal|pp)[-_]?(?:client)?[-_]?(?:secret|key)\s*[:=]\s*['\"]?(E[A-Za-z0-9_-]{71})['\"]?",
         category=SecretCategory.PAYMENT,
         severity=Severity.CRITICAL,
         description="PayPal Client Secret",
@@ -479,7 +485,7 @@ AUTHENTICATION_PATTERNS = [
     ),
     SecretPattern(
         name="okta_token",
-        pattern=r"00[A-Za-z0-9_-]{40}",
+        pattern=r"(?i)(?:okta)[-_]?(?:api)?[-_]?(?:token|key)\s*[:=]\s*['\"]?(00[A-Za-z0-9_-]{40})['\"]?",
         category=SecretCategory.AUTHENTICATION,
         severity=Severity.HIGH,
         description="Okta Token",
@@ -487,7 +493,7 @@ AUTHENTICATION_PATTERNS = [
     ),
     SecretPattern(
         name="auth0_client_secret",
-        pattern=r"[A-Za-z0-9_-]{32,64}",
+        pattern=r"(?i)(?:auth0|client)[-_]?(?:secret|key)\s*[:=]\s*['\"]?([A-Za-z0-9_-]{32,64})['\"]?",
         category=SecretCategory.AUTHENTICATION,
         severity=Severity.HIGH,
         description="Auth0 Client Secret",
@@ -572,7 +578,7 @@ INFRASTRUCTURE_PATTERNS = [
     ),
     SecretPattern(
         name="circleci_token",
-        pattern=r"[a-f0-9]{40}",
+        pattern=r"(?i)(?:circle[-_]?ci|circleci)[-_]?(?:api)?[-_]?(?:token|key)\s*[:=]\s*['\"]?([a-f0-9]{40})['\"]?",
         category=SecretCategory.INFRASTRUCTURE,
         severity=Severity.HIGH,
         description="CircleCI Personal API Token",
@@ -580,7 +586,7 @@ INFRASTRUCTURE_PATTERNS = [
     ),
     SecretPattern(
         name="travis_ci_token",
-        pattern=r"[A-Za-z0-9]{22}",
+        pattern=r"(?i)(?:travis[-_]?ci|travis)[-_]?(?:api)?[-_]?(?:token|key)\s*[:=]\s*['\"]?([A-Za-z0-9]{22})['\"]?",
         category=SecretCategory.INFRASTRUCTURE,
         severity=Severity.HIGH,
         description="Travis CI Token",
@@ -595,7 +601,7 @@ INFRASTRUCTURE_PATTERNS = [
     ),
     SecretPattern(
         name="datadog_api_key",
-        pattern=r"[a-f0-9]{32}",
+        pattern=r"(?i)(?:datadog|dd)[-_]?(?:api)?[-_]?(?:key|token)\s*[:=]\s*['\"]?([a-f0-9]{32})['\"]?",
         category=SecretCategory.INFRASTRUCTURE,
         severity=Severity.HIGH,
         description="Datadog API Key",

@@ -154,7 +154,7 @@ class ReportRepository(BaseRepository[Report]):
         return await self.update(
             report,
             status="failed",
-            status_message=error_message,
+            error_message=error_message,
         )
 
     async def delete_expired(self) -> int:

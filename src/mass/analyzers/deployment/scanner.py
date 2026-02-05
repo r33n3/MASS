@@ -111,9 +111,23 @@ class DeploymentScanner:
             # Extract content from the component
             self._extract_component(component, path, manifest)
 
+        # Detect deployment environment (cloud provider, services, DBs, etc.)
+        from mass.analyzers.deployment.environment import EnvironmentDetector
+        env_detector = EnvironmentDetector()
+        env_profile = env_detector.detect(manifest)
+        manifest.metadata["environment"] = env_profile.to_dict()
+
+        # Build deployment topology graph
+        from mass.analyzers.deployment.topology import TopologyBuilder
+        topology_builder = TopologyBuilder()
+        topology = topology_builder.build(manifest, env_profile)
+        manifest.metadata["topology"] = topology.to_dict()
+
         logger.info(
             f"Scan complete: {manifest.component_count} components, "
-            f"{manifest.instruction_count} instructions"
+            f"{manifest.instruction_count} instructions, "
+            f"environment={env_profile.cloud_provider}, "
+            f"topology={len(topology.nodes)} nodes"
         )
 
         return manifest

@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from mass.core.types import ScanStatus
-from mass.storage.models.scan import Scan, ScanJob
+from mass.storage.models.deployment import Scan
 from mass.storage.repositories.base import BaseRepository
 
 
@@ -230,101 +230,4 @@ class ScanRepository(BaseRepository[Scan]):
         )
 
 
-class ScanJobRepository(BaseRepository[ScanJob]):
-    """Repository for ScanJob model."""
-
-    def __init__(self, session: AsyncSession) -> None:
-        super().__init__(ScanJob, session)
-
-    async def list_by_scan(
-        self,
-        scan_id: str,
-        *,
-        status: ScanStatus | None = None,
-    ) -> Sequence[ScanJob]:
-        """List jobs for a scan.
-
-        Args:
-            scan_id: Scan ID.
-            status: Filter by status.
-
-        Returns:
-            List of scan jobs.
-        """
-        stmt = select(ScanJob).where(ScanJob.scan_id == scan_id)
-        if status:
-            stmt = stmt.where(ScanJob.status == status)
-        stmt = stmt.order_by(ScanJob.created_at)
-        result = await self.session.execute(stmt)
-        return result.scalars().all()
-
-    async def list_pending(self, limit: int = 100) -> Sequence[ScanJob]:
-        """List pending jobs ready for processing.
-
-        Args:
-            limit: Maximum jobs to return.
-
-        Returns:
-            List of pending jobs.
-        """
-        stmt = (
-            select(ScanJob)
-            .where(ScanJob.status == ScanStatus.PENDING)
-            .order_by(ScanJob.created_at)
-            .limit(limit)
-        )
-        result = await self.session.execute(stmt)
-        return result.scalars().all()
-
-    async def claim_job(self, job: ScanJob, worker_id: str) -> ScanJob:
-        """Claim a job for processing.
-
-        Args:
-            job: Job to claim.
-            worker_id: Worker claiming the job.
-
-        Returns:
-            Claimed job.
-        """
-        return await self.update(
-            job,
-            status=ScanStatus.RUNNING,
-            worker_id=worker_id,
-            started_at=datetime.now(timezone.utc),
-        )
-
-    async def complete_job(self, job: ScanJob, findings_count: int = 0) -> ScanJob:
-        """Mark job as completed.
-
-        Args:
-            job: Job to complete.
-            findings_count: Number of findings.
-
-        Returns:
-            Completed job.
-        """
-        return await self.update(
-            job,
-            status=ScanStatus.COMPLETED,
-            completed_at=datetime.now(timezone.utc),
-            progress_percent=100.0,
-            findings_count=findings_count,
-        )
-
-    async def fail_job(self, job: ScanJob, error: str) -> ScanJob:
-        """Mark job as failed.
-
-        Args:
-            job: Job that failed.
-            error: Error message.
-
-        Returns:
-            Failed job.
-        """
-        return await self.update(
-            job,
-            status=ScanStatus.FAILED,
-            completed_at=datetime.now(timezone.utc),
-            error=error,
-            retries=job.retries + 1,
-        )
+# ScanJobRepository removed - ScanJob model doesn't exist in current schema

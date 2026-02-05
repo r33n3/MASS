@@ -68,6 +68,7 @@ class ContextFinding:
     line_number: int | None = None
     line_content: str | None = None
     match_text: str | None = None
+    code_context: str | None = None
     evidence: dict[str, Any] = field(default_factory=dict)
     remediation: str | None = None
 
@@ -83,6 +84,7 @@ class ContextFinding:
             "line_number": self.line_number,
             "line_content": self.line_content,
             "match_text": self.match_text,
+            "code_context": self.code_context,
             "evidence": self.evidence,
             "remediation": self.remediation,
         }
@@ -239,8 +241,12 @@ class ContextAnalyzer:
             lines_scanned=len(lines),
         )
 
-        # Track unique findings to avoid duplicates
-        seen_findings: set[tuple[str, int]] = set()
+        # Collect all matches first, then deduplicate by location.
+        # Multiple patterns often match the same line (e.g. a DAN jailbreak
+        # prompt also matches no_sandbox). Reporting one finding per line
+        # with the best match is more useful than N overlapping findings.
+        all_matches: list[ContextFinding] = []
+        seen_pattern_line: set[tuple[str, int]] = set()
 
         for pattern in self.patterns:
             # Skip patterns below minimum severity
@@ -250,12 +256,26 @@ class ContextAnalyzer:
             for finding in self._find_pattern_matches(
                 content, pattern, lines, file_path
             ):
-                # Deduplicate
+                # Skip same pattern on same line
                 key = (pattern.name, finding.line_number or 0)
-                if key not in seen_findings:
-                    seen_findings.add(key)
-                    result.findings.append(finding)
+                if key not in seen_pattern_line:
+                    seen_pattern_line.add(key)
+                    all_matches.append(finding)
 
+        # Deduplicate by (file, line): keep only the highest-severity match.
+        best_per_line: dict[tuple, ContextFinding] = {}
+        for finding in all_matches:
+            line_key = (str(finding.file_path), finding.line_number or 0)
+            existing = best_per_line.get(line_key)
+            if existing is None:
+                best_per_line[line_key] = finding
+            else:
+                existing_rank = self._severity_order.get(existing.severity, 0)
+                finding_rank = self._severity_order.get(finding.severity, 0)
+                if finding_rank > existing_rank:
+                    best_per_line[line_key] = finding
+
+        result.findings = list(best_per_line.values())
         return result
 
     def _find_pattern_matches(
@@ -287,6 +307,15 @@ class ContextAnalyzer:
             if self._is_false_positive(match.group(0), pattern, line_content):
                 continue
 
+            # Capture surrounding code context (3 lines before/after)
+            ctx_start = max(0, line_num - 4)
+            ctx_end = min(len(lines), line_num + 3)
+            context_lines = []
+            for i in range(ctx_start, ctx_end):
+                marker = ">>> " if i == line_num - 1 else "    "
+                context_lines.append(f"{i + 1:4d} {marker}{lines[i]}")
+            code_context = "\n".join(context_lines)
+
             yield ContextFinding(
                 pattern_name=pattern.name,
                 category=pattern.category,
@@ -297,6 +326,7 @@ class ContextAnalyzer:
                 line_number=line_num,
                 line_content=line_content.strip(),
                 match_text=match.group(0),
+                code_context=code_context,
                 remediation=pattern.remediation,
             )
 

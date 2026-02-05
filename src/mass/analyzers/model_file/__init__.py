@@ -10,6 +10,13 @@ from mass.analyzers.model_file.scanner import (
     ModelFileResult,
     ModelFormat,
 )
+from mass.analyzers.model_file.magic import (
+    MagicSignature,
+    MODEL_SIGNATURES,
+    identify_file,
+    is_model_file,
+    is_binary_file,
+)
 from mass.analyzers.model_file.pickle import PickleAnalyzer, PickleFinding
 from mass.analyzers.model_file.pytorch import PyTorchAnalyzer
 from mass.analyzers.model_file.safetensors import SafetensorsAnalyzer
@@ -21,6 +28,11 @@ __all__ = [
     "ModelFileFinding",
     "ModelFileResult",
     "ModelFormat",
+    "MagicSignature",
+    "MODEL_SIGNATURES",
+    "identify_file",
+    "is_model_file",
+    "is_binary_file",
     "PickleAnalyzer",
     "PickleFinding",
     "PyTorchAnalyzer",

@@ -6,8 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from mass.core.types import ComponentType
-from mass.storage.models.deployment import Component, Deployment
+from mass.storage.models.deployment import Deployment
 from mass.storage.repositories.base import BaseRepository
 
 
@@ -105,66 +104,4 @@ class DeploymentRepository(BaseRepository[Deployment]):
         )
 
 
-class ComponentRepository(BaseRepository[Component]):
-    """Repository for Component model."""
-
-    def __init__(self, session: AsyncSession) -> None:
-        super().__init__(Component, session)
-
-    async def list_by_deployment(
-        self,
-        deployment_id: str,
-        *,
-        component_type: ComponentType | None = None,
-    ) -> Sequence[Component]:
-        """List components for a deployment.
-
-        Args:
-            deployment_id: Deployment ID.
-            component_type: Filter by component type.
-
-        Returns:
-            List of components.
-        """
-        stmt = select(Component).where(Component.deployment_id == deployment_id)
-        if component_type:
-            stmt = stmt.where(Component.component_type == component_type)
-        stmt = stmt.order_by(Component.component_type, Component.name)
-        result = await self.session.execute(stmt)
-        return result.scalars().all()
-
-    async def get_by_type_and_name(
-        self,
-        deployment_id: str,
-        component_type: ComponentType,
-        name: str,
-    ) -> Component | None:
-        """Get component by type and name within deployment.
-
-        Args:
-            deployment_id: Deployment ID.
-            component_type: Component type.
-            name: Component name.
-
-        Returns:
-            Component or None.
-        """
-        return await self.get_by(
-            deployment_id=deployment_id,
-            component_type=component_type,
-            name=name,
-        )
-
-    async def delete_by_deployment(self, deployment_id: str) -> int:
-        """Delete all components for a deployment.
-
-        Args:
-            deployment_id: Deployment ID.
-
-        Returns:
-            Number of deleted components.
-        """
-        components = await self.list_by_deployment(deployment_id)
-        for component in components:
-            await self.delete(component)
-        return len(components)
+# ComponentRepository removed - Components are ephemeral during scanning, not stored in DB

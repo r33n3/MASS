@@ -3,15 +3,20 @@
 Generate and export scan reports.
 """
 
+import hashlib
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, status
+from fastapi.responses import Response
 
 from mass.api.dependencies import (
     CurrentTenantDep,
     ScanRepo,
     ReportRepo,
+    FindingRepo,
     PaginationDep,
+    SettingsDep,
 )
 from mass.api.schemas.report import (
     ReportCreate,
@@ -25,6 +30,9 @@ from mass.api.schemas.report import (
 )
 from mass.api.schemas.common import PaginationMeta
 from mass.storage.models.report import Report
+from mass.reporting.generator import ReportGenerator, ReportConfig, ReportFormat
+from mass.core.findings import Finding as CoreFinding
+from mass.core.types import AttackCategory, ComponentType, Severity
 
 router = APIRouter()
 
@@ -89,6 +97,41 @@ async def list_reports(
     )
 
 
+def _db_finding_to_core(db_finding) -> CoreFinding:
+    """Convert database Finding to core Finding dataclass."""
+    # Map severity string to enum
+    severity_map = {
+        "critical": Severity.CRITICAL,
+        "high": Severity.HIGH,
+        "medium": Severity.MEDIUM,
+        "low": Severity.LOW,
+        "info": Severity.INFO,
+    }
+    severity = severity_map.get(db_finding.severity.lower(), Severity.INFO)
+
+    # Map category string to enum (with fallback to SENSITIVE_INFO)
+    try:
+        category = AttackCategory(db_finding.category)
+    except ValueError:
+        category = AttackCategory.SENSITIVE_INFO
+
+    return CoreFinding(
+        id=db_finding.id,
+        title=db_finding.title,
+        description=db_finding.description,
+        severity=severity,
+        category=category,
+        component_type=ComponentType.MODEL,  # Default; could be enhanced
+        component_name="deployment",
+        file_path=db_finding.file_path,
+        line_number=db_finding.line_number,
+        cwe_ids=[db_finding.cwe_id] if db_finding.cwe_id else [],
+        owasp_ids=[db_finding.owasp_category] if db_finding.owasp_category else [],
+        mitre_ids=[db_finding.mitre_technique] if db_finding.mitre_technique else [],
+        scan_id=db_finding.scan_id,
+    )
+
+
 @router.post(
     "",
     response_model=ReportResponse,
@@ -101,6 +144,8 @@ async def generate_report(
     tenant: CurrentTenantDep,
     scan_repo: ScanRepo,
     report_repo: ReportRepo,
+    finding_repo: FindingRepo,
+    settings: SettingsDep,
 ) -> ReportResponse:
     """Generate a new report from scan results."""
     # Verify scan exists and belongs to tenant
@@ -116,15 +161,72 @@ async def generate_report(
     report = Report(
         tenant_id=tenant.tenant_id,
         scan_id=request.scan_id,
-        name=request.name or f"Report - {scan.name or scan.id}",
+        name=request.name or f"Report - {scan.id[:8]}",
         report_type=request.report_type,
         format=request.format,
         status="pending",
     )
 
     created = await report_repo.create(report)
+    report_id = created.id
 
-    # TODO: Queue report generation for async processing
+    # Load findings for the scan
+    db_findings = await finding_repo.list_by_scan(request.scan_id, limit=10000)
+    core_findings = [_db_finding_to_core(f) for f in db_findings]
+
+    # Map request format to ReportFormat enum
+    format_map = {
+        "sarif": ReportFormat.SARIF,
+        "html": ReportFormat.HTML,
+        "json": ReportFormat.JSON,
+        "pdf": ReportFormat.PDF,
+    }
+    report_format = format_map.get(request.format.lower(), ReportFormat.JSON)
+
+    # Generate the report content (pure computation, no DB)
+    try:
+        config = ReportConfig(
+            title=created.name,
+            include_evidence=request.include_evidence,
+            include_remediation=request.include_remediation,
+        )
+        generator = ReportGenerator(config)
+        generated = generator.generate(
+            format=report_format,
+            findings=core_findings,
+            scan_id=request.scan_id,
+            metadata={"scan_id": scan.id, "profile": scan.profile},
+        )
+
+        # Save to data directory
+        reports_dir = Path(settings.storage.local_path) / "reports" / tenant.tenant_id
+        reports_dir.mkdir(parents=True, exist_ok=True)
+        saved_path = generated.save(reports_dir)
+
+        # Calculate file hash
+        file_content = saved_path.read_bytes()
+        file_hash = hashlib.sha256(file_content).hexdigest()
+
+        # Mark completed
+        created.status = "completed"
+        created.file_path = str(saved_path)
+        created.file_size = generated.size_bytes
+        created.file_hash = file_hash
+        created.generated_at = datetime.utcnow()
+        await report_repo.session.flush()
+        await report_repo.session.refresh(created)
+
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).exception("Report generation failed")
+        # Update status directly on the object to avoid session issues
+        created.status = "failed"
+        created.error_message = str(e)[:1000]
+        try:
+            await report_repo.session.flush()
+            await report_repo.session.refresh(created)
+        except Exception:
+            pass  # If session is broken, return what we have
 
     return _report_to_response(created)
 
@@ -179,14 +281,72 @@ async def export_report(
             detail="Report is not yet completed",
         )
 
-    # TODO: Generate export in requested format
-    # For now, return a placeholder response
-
     return ExportResponse(
-        download_url=f"/api/v1/reports/{report_id}/download?format={request.format}",
+        download_url=f"/api/v1/reports/{report_id}/download",
         expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
-        format=request.format,
-        file_size=0,  # TODO: Calculate actual size
+        format=report.format,
+        file_size=report.file_size or 0,
+    )
+
+
+@router.get(
+    "/{report_id}/download",
+    summary="Download report",
+    description="Download the generated report file.",
+)
+async def download_report(
+    report_id: str,
+    tenant: CurrentTenantDep,
+    report_repo: ReportRepo,
+) -> Response:
+    """Download a generated report file."""
+    report = await report_repo.get(report_id)
+
+    if not report or report.tenant_id != tenant.tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Report not found",
+        )
+
+    if report.status != "completed":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Report is not yet completed",
+        )
+
+    if not report.file_path:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Report file not found",
+        )
+
+    file_path = Path(report.file_path)
+    if not file_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Report file not found on disk",
+        )
+
+    # Determine content type
+    content_types = {
+        "sarif": "application/sarif+json",
+        "json": "application/json",
+        "html": "text/html",
+        "pdf": "application/pdf",
+        "markdown": "text/markdown",
+    }
+    content_type = content_types.get(report.format, "application/octet-stream")
+
+    # Read and return file
+    content = file_path.read_bytes()
+
+    return Response(
+        content=content,
+        media_type=content_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{file_path.name}"',
+            "Content-Length": str(len(content)),
+        },
     )
 
 

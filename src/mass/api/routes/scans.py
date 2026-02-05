@@ -3,17 +3,24 @@
 CRUD operations for security scans and scan management.
 """
 
+import asyncio
+import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, status
 
 from mass.api.dependencies import (
     CurrentTenantDep,
+    DBSession,
     ScanRepo,
     DeploymentRepo,
     FindingRepo,
     PaginationDep,
+    get_scan_queue,
 )
+from mass.api.services.scan_execution import ScanExecutionService
+
+logger = logging.getLogger(__name__)
 from mass.api.schemas.scan import (
     ScanCreate,
     ScanResponse,
@@ -27,61 +34,66 @@ from mass.api.schemas.deployment import DeploymentSummary
 from mass.api.schemas.finding import FindingResponse, FindingListResponse, FindingSummary
 from mass.api.schemas.common import PaginationMeta
 from mass.core.types import ScanStatus
-from mass.storage.models.scan import Scan
+from mass.storage.models.deployment import Scan
 
 router = APIRouter()
 
 
 def _scan_to_response(scan: Scan, include_jobs: bool = False) -> ScanResponse:
-    """Convert a scan model to response schema."""
+    """Convert a scan model to response schema.
+
+    Maps actual model fields to API schema fields.
+    """
+    import json
+
+    # Extract deployment info if available (don't trigger lazy loading)
+    deployment_id = scan.deployment_id
+    deployment_name = "Unknown"
+    deployment_version = None
+
+    # Only access deployment if it's already loaded
+    if hasattr(scan, '__dict__') and 'deployment' in scan.__dict__:
+        if scan.deployment:
+            deployment_id = scan.deployment.id
+            deployment_name = scan.deployment.name
+            # Extract version from deployment meta
+            if scan.deployment.meta:
+                try:
+                    meta_data = json.loads(scan.deployment.meta)
+                    deployment_version = meta_data.get("version")
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
     deployment_summary = DeploymentSummary(
-        id=scan.deployment.id if scan.deployment else scan.deployment_id,
-        name=scan.deployment.name if scan.deployment else "Unknown",
-        version=scan.deployment.version if scan.deployment else None,
+        id=deployment_id,
+        name=deployment_name,
+        version=deployment_version,
     )
 
+    # Model doesn't have jobs relationship in current implementation
     jobs = None
-    if include_jobs and scan.jobs:
-        jobs = [
-            ScanJobResponse(
-                id=job.id,
-                job_type=job.job_type,
-                component_id=job.component_id,
-                status=job.status,
-                progress_percent=job.progress_percent,
-                items_total=job.items_total,
-                items_completed=job.items_completed,
-                started_at=job.started_at,
-                completed_at=job.completed_at,
-                findings_count=job.findings_count,
-                error=job.error,
-                created_at=job.created_at,
-                updated_at=job.updated_at,
-            )
-            for job in scan.jobs
-        ]
 
     return ScanResponse(
         id=scan.id,
         deployment=deployment_summary,
-        name=scan.name,
+        name=None,  # Model doesn't have name field
         profile=scan.profile,
         status=scan.status,
-        status_message=scan.status_message,
+        status_message=scan.error_message,  # Map error_message to status_message
         progress_percent=scan.progress_percent,
         current_phase=scan.current_phase,
         started_at=scan.started_at,
         completed_at=scan.completed_at,
         duration_seconds=scan.duration_seconds,
-        findings_count=scan.findings_count,
+        findings_count=scan.total_findings,
         severity_counts=ScanSeverityCounts(
-            critical=scan.critical_count,
-            high=scan.high_count,
-            medium=scan.medium_count,
-            low=scan.low_count,
-            info=scan.info_count,
+            critical=scan.critical_findings,
+            high=scan.high_findings,
+            medium=scan.medium_findings,
+            low=scan.low_findings,
+            info=0,  # Model doesn't track info severity
         ),
-        triggered_by=scan.triggered_by,
+        triggered_by=None,  # Model doesn't track triggered_by
         jobs=jobs,
         created_at=scan.created_at,
         updated_at=scan.updated_at,
@@ -138,12 +150,23 @@ async def list_scans(
 )
 async def start_scan(
     request: ScanCreate,
+    background_tasks: BackgroundTasks,
     tenant: CurrentTenantDep,
+    db: DBSession,
     scan_repo: ScanRepo,
     deployment_repo: DeploymentRepo,
 ) -> ScanResponse:
-    """Start a new scan on a deployment."""
+    """Start a new scan on a deployment.
+
+    Dispatches the scan to a Redis-backed worker queue for execution
+    in a separate container. Falls back to in-process BackgroundTasks
+    if Redis is unavailable.
+
+    Enforces the `scan_max_concurrent` configuration limit to prevent
+    overloading when many deployments are submitted simultaneously.
+    """
     import json
+    from mass.core.config import get_settings
 
     # Verify deployment exists and belongs to tenant
     deployment = await deployment_repo.get(request.deployment_id)
@@ -153,32 +176,78 @@ async def start_scan(
             detail="Deployment not found",
         )
 
-    if not deployment.is_active:
+    # Enforce concurrent scan limit to prevent overload
+    settings = get_settings()
+    active_count = await scan_repo.count(
+        tenant_id=tenant.tenant_id,
+        status="running",
+    )
+    pending_count = await scan_repo.count(
+        tenant_id=tenant.tenant_id,
+        status="pending",
+    )
+    if active_count + pending_count >= settings.scan_max_concurrent:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot scan an inactive deployment",
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=(
+                f"Concurrent scan limit reached ({settings.scan_max_concurrent}). "
+                f"Currently {active_count} running, {pending_count} pending. "
+                f"Wait for active scans to complete or increase scan_max_concurrent."
+            ),
         )
 
-    # Create the scan
+    # Create the scan (only using fields that exist in model)
     scan = Scan(
         tenant_id=tenant.tenant_id,
         deployment_id=request.deployment_id,
-        name=request.name,
-        profile=request.profile,
+        profile=request.profile.value if hasattr(request.profile, 'value') else request.profile,
+        status=ScanStatus.PENDING.value,
         config=json.dumps(request.config) if request.config else None,
-        status=ScanStatus.PENDING,
-        progress_percent=0.0,
-        findings_count=0,
-        triggered_by=request.triggered_by or "api",
+        # Initialize findings counters
+        total_findings=0,
+        critical_findings=0,
+        high_findings=0,
+        medium_findings=0,
+        low_findings=0,
     )
 
     created = await scan_repo.create(scan)
 
-    # TODO: Queue the scan for processing by workers
+    # Commit scan to DB before dispatching (worker/background task uses its own session)
+    await db.commit()
 
-    # Reload with deployment relationship
-    created = await scan_repo.get_with_deployment(created.id)
+    # Try to dispatch to worker via Redis queue
+    dispatched = False
+    queue = await get_scan_queue()
+    if queue is not None:
+        try:
+            from mass.workers.base import Job, JobPriority
 
+            job = Job(
+                job_type="full_scan",
+                payload={"scan_id": created.id},
+                scan_id=created.id,
+                tenant_id=tenant.tenant_id,
+                queue_name="scans",
+                timeout_seconds=1800,
+                priority=JobPriority.NORMAL,
+            )
+            await queue.enqueue(job)
+            dispatched = True
+            logger.info("Scan %s dispatched to worker queue", created.id)
+        except Exception as e:
+            logger.warning(
+                "Failed to enqueue scan %s to Redis, falling back to in-process: %s",
+                created.id, e,
+            )
+
+    # Fallback: run in-process via BackgroundTasks
+    if not dispatched:
+        logger.info("Scan %s running in-process (no worker queue)", created.id)
+        scan_service = ScanExecutionService()
+        background_tasks.add_task(scan_service.execute_scan, created.id)
+
+    # Return response (scan will be executed in background)
     return _scan_to_response(created)
 
 
@@ -195,7 +264,7 @@ async def get_scan(
     include_jobs: bool = False,
 ) -> ScanResponse:
     """Get details of a specific scan."""
-    scan = await scan_repo.get_with_deployment(scan_id)
+    scan = await scan_repo.get_with_findings(scan_id)
 
     if not scan or scan.tenant_id != tenant.tenant_id:
         raise HTTPException(
@@ -231,7 +300,9 @@ async def get_scan_status(
         status=scan.status,
         progress_percent=scan.progress_percent,
         current_phase=scan.current_phase,
-        status_message=scan.status_message,
+        status_message=scan.error_message,
+        jobs_completed=scan.jobs_completed,
+        jobs_total=scan.jobs_total,
     )
 
 
@@ -317,16 +388,26 @@ async def get_scan_findings(
 
     total = await finding_repo.count(**filters)
 
-    # Convert to response models
+    # Convert DB findings to response models
+    # DB model has different fields than the schema expects, so we map them
     from mass.api.schemas.finding import ComplianceMapping
     import json
 
     items = []
     for f in findings:
-        cwe_ids = json.loads(f.cwe_ids) if f.cwe_ids else []
-        owasp_ids = json.loads(f.owasp_ids) if f.owasp_ids else []
-        mitre_ids = json.loads(f.mitre_ids) if f.mitre_ids else []
-        tags = json.loads(f.tags) if f.tags else []
+        # Parse meta JSON for fields stored there by scan_execution
+        meta_data = {}
+        if f.meta:
+            try:
+                meta_data = json.loads(f.meta)
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        # Map singular DB fields to schema list fields
+        cwe_ids = [f.cwe_id] if f.cwe_id else []
+        owasp_ids = [f.owasp_category] if f.owasp_category else []
+        mitre_ids = [f.mitre_technique] if f.mitre_technique else []
+        tags = meta_data.get("tags", [])
 
         items.append(
             FindingResponse(
@@ -336,23 +417,23 @@ async def get_scan_findings(
                 description=f.description,
                 severity=f.severity,
                 category=f.category,
-                component_type=f.component_type,
-                component_name=f.component_name,
+                component_type=meta_data.get("component_type", "unknown"),
+                component_name=meta_data.get("component_name", "unknown"),
                 file_path=f.file_path,
                 line_number=f.line_number,
-                confidence=f.confidence,
-                false_positive=f.false_positive,
-                suppressed=f.suppressed,
-                acknowledged=f.acknowledged,
-                acknowledged_by=f.acknowledged_by,
-                acknowledged_at=f.acknowledged_at,
+                confidence=meta_data.get("confidence", 1.0),
+                false_positive=False,
+                suppressed=False,
+                acknowledged=False,
+                acknowledged_by=None,
+                acknowledged_at=None,
                 compliance=ComplianceMapping(
                     cwe_ids=cwe_ids,
                     owasp_ids=owasp_ids,
                     mitre_ids=mitre_ids,
                 ),
-                probe_name=f.probe_name,
-                detector_name=f.detector_name,
+                probe_name=meta_data.get("probe_name"),
+                detector_name=meta_data.get("detector_name"),
                 tags=tags,
                 created_at=f.created_at,
                 updated_at=f.updated_at,
@@ -391,6 +472,17 @@ async def get_scan_findings_summary(
             detail="Scan not found",
         )
 
-    summary = await finding_repo.get_summary(scan_id)
+    # Build summary from actual DB data
+    by_severity = await finding_repo.count_by_severity(scan_id)
+    by_category = await finding_repo.count_by_category(scan_id)
+    total = await finding_repo.count(scan_id=scan_id)
 
-    return FindingSummary(**summary)
+    return FindingSummary(
+        total=total,
+        by_severity=by_severity,
+        by_category=by_category,
+        by_component={},
+        false_positives=0,
+        suppressed=0,
+        acknowledged=0,
+    )

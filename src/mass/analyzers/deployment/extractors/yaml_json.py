@@ -123,6 +123,8 @@ class YamlJsonExtractor(BaseExtractor):
                 current_path = path + [key]
 
                 # Check if this key contains a prompt
+                if not isinstance(key, str):
+                    continue
                 key_lower = key.lower().replace("-", "_").replace(" ", "_")
                 if key_lower in self.PROMPT_KEYS:
                     if isinstance(value, str) and len(value) > 20:

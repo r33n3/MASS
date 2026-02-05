@@ -122,6 +122,32 @@ class SecretDetector:
         "Pipfile.lock", "requirements-lock.txt",
     }
 
+    # Documentation files - skip for secrets scanning (examples, not real creds).
+    # Only relevant if loaded as AI context, which the context analyzer handles.
+    DOC_FILES = {
+        "readme.md", "readme.rst", "readme.txt", "readme",
+        "changelog.md", "changelog.rst", "changelog.txt", "changelog",
+        "changes.md", "changes.txt",
+        "contributing.md", "contributing.rst",
+        "code_of_conduct.md",
+        "authors.md", "authors.txt",
+        "history.md", "history.rst",
+        "license", "license.md", "license.txt",
+        "notice", "notice.md", "notice.txt",
+        "security.md",
+        "todo.md", "todo.txt",
+    }
+
+    # Documentation directories - skip entirely
+    DOC_DIRS = {
+        "docs", "doc", "documentation",
+        "examples", "example",
+        "samples", "sample",
+        "tutorials", "tutorial",
+        "guides", "guide",
+        "wiki",
+    }
+
     def __init__(
         self,
         patterns: list[SecretPattern] | None = None,
@@ -175,19 +201,50 @@ class SecretDetector:
         # Track unique secrets to avoid duplicates
         seen_secrets: set[str] = set()
 
+        # Collect all matches first, then deduplicate by location
+        all_matches: list[SecretMatch] = []
+
         # Pattern-based detection
         for pattern in self.patterns:
             for match in self._find_pattern_matches(content, pattern, lines, file_path):
                 if match.value not in seen_secrets:
                     seen_secrets.add(match.value)
-                    result.secrets.append(match)
+                    all_matches.append(match)
 
         # Entropy-based detection
         if self.use_entropy:
             for match in self._find_entropy_matches(content, lines, file_path):
                 if match.value not in seen_secrets:
                     seen_secrets.add(match.value)
-                    result.secrets.append(match)
+                    all_matches.append(match)
+
+        # Deduplicate by (file, line): keep only the highest-severity match per line.
+        # Multiple patterns often match the same high-entropy string (e.g. a base64
+        # value matches aws_secret_key, cohere_api_key, etc.). Reporting one finding
+        # per line with the best match is more useful than N overlapping findings.
+        severity_rank = {
+            Severity.CRITICAL: 0,
+            Severity.HIGH: 1,
+            Severity.MEDIUM: 2,
+            Severity.LOW: 3,
+        }
+        best_per_line: dict[tuple, SecretMatch] = {}
+        for match in all_matches:
+            key = (str(match.file_path), match.line_number)
+            existing = best_per_line.get(key)
+            if existing is None:
+                best_per_line[key] = match
+            else:
+                # Keep higher severity; on tie keep higher confidence
+                existing_rank = severity_rank.get(existing.severity, 99)
+                match_rank = severity_rank.get(match.severity, 99)
+                if match_rank < existing_rank or (
+                    match_rank == existing_rank
+                    and match.confidence > existing.confidence
+                ):
+                    best_per_line[key] = match
+
+        result.secrets = list(best_per_line.values())
 
         # Filter by confidence if needed
         if not self.include_low_confidence:
@@ -412,15 +469,29 @@ class SecretDetector:
             if re.search(fp_pattern, value, re.IGNORECASE):
                 return True
 
-        # Check for common false positive indicators
-        false_positive_indicators = [
-            "example", "test", "sample", "demo", "placeholder",
-            "your_", "xxx", "abc", "123", "fake", "mock",
-        ]
-
+        # Check for values that are clearly placeholder/example values
+        # Only match when the ENTIRE value looks like a placeholder,
+        # not when a substring like "abc" appears in a longer base64 key
         value_lower = value.lower()
-        for indicator in false_positive_indicators:
-            if indicator in value_lower:
+
+        # Full-value indicators (the entire secret is a placeholder)
+        full_value_indicators = [
+            "your_", "xxx", "fake", "mock",
+        ]
+        for indicator in full_value_indicators:
+            if value_lower.startswith(indicator):
+                return True
+
+        # Check if the entire value is a common placeholder
+        placeholder_patterns = [
+            r"^(example|test|sample|demo|placeholder|dummy|changeme|todo)[_\-]?",
+            r"^<.*>$",             # <YOUR_KEY_HERE>
+            r"^\$\{.*\}$",        # ${API_KEY}
+            r"^\{\{.*\}\}$",      # {{api_key}}
+            r"^%.*%$",            # %API_KEY%
+        ]
+        for fp_pattern in placeholder_patterns:
+            if re.match(fp_pattern, value_lower):
                 return True
 
         return False
@@ -442,6 +513,16 @@ class SecretDetector:
         if file_path.name in self.SKIP_FILES:
             return True
 
+        # Skip documentation files - they contain examples, not real creds.
+        # The context analyzer handles doc files if they're loaded as AI context.
+        if file_path.name.lower() in self.DOC_FILES:
+            return True
+
+        # Skip files inside documentation directories
+        for parent in file_path.parents:
+            if parent.name.lower() in self.DOC_DIRS:
+                return True
+
         return False
 
     def _should_skip_directory(self, dir_path: Path) -> bool:
@@ -453,7 +534,11 @@ class SecretDetector:
         Returns:
             True if directory should be skipped.
         """
-        return dir_path.name in self.SKIP_DIRECTORIES
+        if dir_path.name in self.SKIP_DIRECTORIES:
+            return True
+        if dir_path.name.lower() in self.DOC_DIRS:
+            return True
+        return False
 
     def _iter_files(
         self,

@@ -37,6 +37,19 @@ class Severity(str, Enum):
     INFO = "info"  # Informational finding, no direct impact
 
 
+class ConfidenceLevel(str, Enum):
+    """Finding confidence level based on detection method.
+
+    Indicates how the finding was detected and whether it has been
+    validated through actual model interaction.
+    """
+
+    PREDICTED = "predicted"  # Topology-based risk assessment (not validated)
+    STATIC_MATCH = "static_match"  # Regex pattern matched in source code (unvalidated)
+    HEURISTIC = "heuristic"  # Pattern match with supporting contextual signals
+    CONFIRMED = "confirmed"  # Validated via model interaction (prompt/response)
+
+
 class ScanStatus(str, Enum):
     """Scan execution status.
 

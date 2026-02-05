@@ -308,6 +308,82 @@ class GenericSecretValidator(BaseValidator):
         )
 
 
+class PrefixedTokenValidator(BaseValidator):
+    """Validator for tokens with a known prefix."""
+
+    def __init__(self, prefix: str, min_length: int = 20):
+        self.prefix = prefix
+        self.min_length = min_length
+
+    def validate(self, secret: str) -> ValidationResult:
+        """Validate a prefixed token format."""
+        if secret.startswith(self.prefix) and len(secret) >= self.min_length:
+            return ValidationResult(
+                is_valid=True,
+                confidence=0.85,
+                message=f"Valid {self.prefix}... token format",
+            )
+        return ValidationResult(
+            is_valid=False,
+            confidence=0.7,
+            message=f"Does not match {self.prefix} format",
+        )
+
+
+class FormatValidator(BaseValidator):
+    """Validator that checks basic format constraints (length, entropy)."""
+
+    def __init__(self, min_length: int = 20):
+        self.min_length = min_length
+
+    def validate(self, secret: str) -> ValidationResult:
+        """Validate based on length and character variety."""
+        if len(secret) < self.min_length:
+            return ValidationResult(
+                is_valid=False,
+                confidence=0.7,
+                message="Too short for expected format",
+            )
+
+        has_upper = any(c.isupper() for c in secret)
+        has_lower = any(c.islower() for c in secret)
+        has_digit = any(c.isdigit() for c in secret)
+        complexity = sum([has_upper, has_lower, has_digit])
+
+        if complexity >= 2:
+            return ValidationResult(
+                is_valid=True,
+                confidence=0.7,
+                message="Matches expected format constraints",
+            )
+
+        return ValidationResult(
+            is_valid=True,
+            confidence=0.5,
+            message="Low complexity match",
+        )
+
+
+class AWSSecretKeyValidator(BaseValidator):
+    """Validator for AWS secret access keys."""
+
+    PATTERN = re.compile(r"^[A-Za-z0-9/+=]{40}$")
+
+    def validate(self, secret: str) -> ValidationResult:
+        """Validate an AWS secret access key format."""
+        if self.PATTERN.match(secret):
+            return ValidationResult(
+                is_valid=True,
+                confidence=0.8,
+                message="Valid AWS secret key format (40 chars, base64-like)",
+            )
+        return ValidationResult(
+            is_valid=False,
+            confidence=0.7,
+            message="Invalid AWS secret key format",
+        )
+
+
 class ValidatorRegistry:
     """Registry of secret validators."""
 
@@ -317,11 +393,20 @@ class ValidatorRegistry:
             "openai": OpenAIKeyValidator(),
             "anthropic": AnthropicKeyValidator(),
             "aws": AWSAccessKeyValidator(),
+            "aws_secret": AWSSecretKeyValidator(),
             "github": GitHubTokenValidator(),
             "jwt": JWTValidator(),
             "private_key": PrivateKeyValidator(),
             "database": DatabaseURIValidator(),
             "generic": GenericSecretValidator(),
+            # AI provider validators
+            "google_ai": PrefixedTokenValidator("AIzaSy", min_length=39),
+            "cohere": FormatValidator(min_length=40),
+            "huggingface": PrefixedTokenValidator("hf_", min_length=36),
+            "replicate": PrefixedTokenValidator("r8_", min_length=40),
+            "mistral": FormatValidator(min_length=32),
+            "together": FormatValidator(min_length=64),
+            "groq": PrefixedTokenValidator("gsk_", min_length=56),
         }
 
     def register(self, name: str, validator: BaseValidator) -> None:
@@ -349,12 +434,12 @@ class ValidatorRegistry:
 
         Args:
             secret: Secret to validate.
-            validator_names: List of validator names to use. Uses generic if None.
+            validator_names: List of validator names to use. Uses generic if None or empty.
 
         Returns:
             Best validation result.
         """
-        if validator_names is None:
+        if not validator_names:
             validator_names = ["generic"]
 
         best_result = ValidationResult(is_valid=False, confidence=0)
