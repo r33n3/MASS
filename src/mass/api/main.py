@@ -30,6 +30,7 @@ from mass.api.routes import (
     scan_targets,
     interrogation,
     browse,
+    mcp_interrogation,
 )
 
 
@@ -119,6 +120,7 @@ def create_app() -> FastAPI:
     app.include_router(scan_targets.router, prefix=f"{api_prefix}/scan-targets", tags=["Scan Targets"])
     app.include_router(interrogation.router, prefix=f"{api_prefix}/interrogation", tags=["Interrogation"])
     app.include_router(browse.router, prefix=f"{api_prefix}/browse", tags=["Browse"])
+    app.include_router(mcp_interrogation.router, prefix=f"{api_prefix}/mcp-interrogation", tags=["MCP Interrogation"])
 
     # WebSocket for real-time scan updates
     from mass.dashboard.websocket import router as ws_router
