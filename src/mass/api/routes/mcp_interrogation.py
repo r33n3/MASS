@@ -234,7 +234,7 @@ async def start_mcp_interrogation(
     job = {
         "id": job_id,
         "name": request.name,
-        "tenant_id": tenant.id,
+        "tenant_id": tenant.tenant_id,
         "status": InterrogationStatus.PENDING.value,
         "created_at": datetime.utcnow().isoformat(),
         "started_at": None,
@@ -313,7 +313,7 @@ async def list_interrogation_jobs(
     """List MCP interrogation jobs for the tenant."""
     jobs = [
         j for j in _jobs.values()
-        if j.get("tenant_id") == tenant.id
+        if j.get("tenant_id") == tenant.tenant_id
     ]
 
     if status:
@@ -338,7 +338,7 @@ async def get_interrogation_job(
     """Get details of an MCP interrogation job."""
     job = _jobs.get(job_id)
 
-    if not job or job.get("tenant_id") != tenant.id:
+    if not job or job.get("tenant_id") != tenant.tenant_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Job not found: {job_id}"
@@ -359,7 +359,7 @@ async def cancel_interrogation_job(
     """Cancel a running interrogation job."""
     job = _jobs.get(job_id)
 
-    if not job or job.get("tenant_id") != tenant.id:
+    if not job or job.get("tenant_id") != tenant.tenant_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Job not found: {job_id}"

@@ -272,7 +272,10 @@ class StdioTransport(MCPTransportBase):
 
 
 class HTTPTransport(MCPTransportBase):
-    """HTTP transport - communicates via HTTP POST requests."""
+    """HTTP transport - communicates via HTTP POST requests.
+
+    Supports both pure JSON-RPC and Streamable HTTP (SSE responses).
+    """
 
     def __init__(
         self,
@@ -286,17 +289,26 @@ class HTTPTransport(MCPTransportBase):
         self._client: httpx.AsyncClient | None = None
         self._request_id = 0
         self._session_id: str | None = None
+        self._init_result: dict[str, Any] = {}
 
     async def connect(self) -> None:
         """Initialize HTTP client and MCP session."""
+        # Add required Accept header for Streamable HTTP MCP servers
+        default_headers = {
+            "Accept": "application/json, text/event-stream",
+            "Content-Type": "application/json",
+        }
+        default_headers.update(self.headers)
+
+        # Don't use base_url - we'll use the full URL in each request
+        # to avoid httpx adding trailing slashes
         self._client = httpx.AsyncClient(
-            base_url=self.base_url,
-            headers=self.headers,
+            headers=default_headers,
             timeout=self.timeout,
         )
 
         # Initialize MCP session
-        init_result = await self.send_request("initialize", {
+        init_result, response_headers = await self._send_request_with_headers("initialize", {
             "protocolVersion": "2024-11-05",
             "capabilities": {},
             "clientInfo": {
@@ -305,8 +317,17 @@ class HTTPTransport(MCPTransportBase):
             },
         })
 
-        self._session_id = init_result.get("sessionId")
+        # Session ID comes from response header, not body
+        self._session_id = response_headers.get("mcp-session-id")
+        # Store the init result for later retrieval
+        self._init_result = init_result
         logger.info(f"MCP HTTP session initialized: {self._session_id}")
+
+        # Send initialized notification
+        try:
+            await self.send_request("notifications/initialized", {})
+        except Exception:
+            pass  # Some servers don't require this
 
     async def disconnect(self) -> None:
         """Close HTTP client."""
@@ -315,12 +336,12 @@ class HTTPTransport(MCPTransportBase):
             self._client = None
             self._session_id = None
 
-    async def send_request(
+    async def _send_request_with_headers(
         self,
         method: str,
         params: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        """Send JSON-RPC request via HTTP POST."""
+    ) -> tuple[dict[str, Any], dict[str, str]]:
+        """Send request and return both result and response headers."""
         if not self._client:
             raise RuntimeError("Not connected")
 
@@ -335,24 +356,72 @@ class HTTPTransport(MCPTransportBase):
 
         headers = {}
         if self._session_id:
-            headers["X-MCP-Session-Id"] = self._session_id
+            headers["Mcp-Session-Id"] = self._session_id
 
         response = await self._client.post(
-            "/mcp",
+            self.base_url,
             json=request,
             headers=headers,
         )
         response.raise_for_status()
 
+        # Extract response headers
+        response_headers = dict(response.headers)
+
+        content_type = response.headers.get("content-type", "")
+
+        # Handle SSE response (text/event-stream)
+        if "text/event-stream" in content_type:
+            result = await self._parse_sse_response(response)
+            return result, response_headers
+
+        # Handle JSON response
         result = response.json()
 
         if "error" in result:
             raise RuntimeError(f"MCP error: {result['error']}")
 
-        return result.get("result", {})
+        return result.get("result", {}), response_headers
+
+    async def send_request(
+        self,
+        method: str,
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Send JSON-RPC request via HTTP POST.
+
+        Handles both JSON and SSE (text/event-stream) responses.
+        """
+        result, _ = await self._send_request_with_headers(method, params)
+        return result
+
+    async def _parse_sse_response(self, response: httpx.Response) -> dict[str, Any]:
+        """Parse SSE response and extract the result."""
+        content = response.text
+        result = {}
+
+        for line in content.split("\n"):
+            line = line.strip()
+            if line.startswith("data:"):
+                data = line[5:].strip()
+                if data:
+                    try:
+                        message = json.loads(data)
+                        if "result" in message:
+                            result = message.get("result", {})
+                        elif "error" in message:
+                            raise RuntimeError(f"MCP error: {message['error']}")
+                    except json.JSONDecodeError:
+                        continue
+
+        return result
 
     def is_connected(self) -> bool:
         return self._client is not None
+
+    def get_init_result(self) -> dict[str, Any]:
+        """Get the result from the initialize call."""
+        return self._init_result
 
 
 class SSETransport(MCPTransportBase):
@@ -602,13 +671,18 @@ class MCPClient:
     async def get_server_info(self) -> dict[str, Any]:
         """Get server capabilities and info."""
         if not self._server_info:
-            # Re-initialize to get server info
-            self._server_info = await self.transport.send_request("initialize", {
-                "protocolVersion": "2024-11-05",
-                "capabilities": {},
-                "clientInfo": {
-                    "name": "mass-mcp-interrogator",
-                    "version": "1.0.0",
-                },
-            })
+            # Try to get cached init result from transport first
+            if hasattr(self.transport, 'get_init_result'):
+                self._server_info = self.transport.get_init_result()
+
+            # If still empty, try to initialize (for transports that don't cache)
+            if not self._server_info:
+                self._server_info = await self.transport.send_request("initialize", {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": {
+                        "name": "mass-mcp-interrogator",
+                        "version": "1.0.0",
+                    },
+                })
         return self._server_info
