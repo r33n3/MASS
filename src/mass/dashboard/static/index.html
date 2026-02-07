@@ -8233,6 +8233,8 @@
         }
 
         // ── Scan Compare ──
+        let _compareScansList = [];
+
         async function openScanCompare() {
             try {
                 const scans = await apiFetch('/api/v1/dashboard/scans?limit=50');
@@ -8241,11 +8243,16 @@
                     showToast('Need at least 2 completed scans to compare', 'warning');
                     return;
                 }
+                _compareScansList = completed;
                 const sel1 = document.getElementById('compareScan1');
                 const sel2 = document.getElementById('compareScan2');
-                sel1.innerHTML = completed.map(s => `<option value="${s.scan_id}">${escapeHtml(s.target)} (${s.scan_id.slice(0, 8)}...)</option>`).join('');
-                sel2.innerHTML = completed.map(s => `<option value="${s.scan_id}">${escapeHtml(s.target)} (${s.scan_id.slice(0, 8)}...)</option>`).join('');
-                // Default: select second-most-recent as baseline, most-recent as current
+                const optHtml = completed.map(s => {
+                    const date = s.started_at ? new Date(s.started_at).toLocaleDateString() : '';
+                    return `<option value="${s.scan_id}" data-target="${escapeHtml(s.target)}">${escapeHtml(s.target)} — ${date} (${s.scan_id.slice(0, 8)})</option>`;
+                }).join('');
+                sel1.innerHTML = optHtml;
+                sel2.innerHTML = optHtml;
+                // Default: second-most-recent as baseline, most-recent as current
                 if (completed.length >= 2) {
                     sel1.value = completed[1].scan_id;
                     sel2.value = completed[0].scan_id;
@@ -8274,7 +8281,16 @@
                     body: JSON.stringify({ scan_id_1: scan1, scan_id_2: scan2 }),
                 });
 
-                let html = '<div class="compare-results">';
+                // Header with scan dates
+                const s1 = _compareScansList.find(s => s.scan_id === scan1);
+                const s2 = _compareScansList.find(s => s.scan_id === scan2);
+                let html = '<div style="display:flex;justify-content:space-between;font-size:0.75rem;color:var(--text-muted);padding:0.5rem 0;border-bottom:1px solid var(--border);margin-bottom:0.75rem;">';
+                html += `<span>Baseline: <b style="color:var(--text-secondary);">${s1 ? escapeHtml(s1.target) : scan1.slice(0,8)}</b> ${resp.scan_1_date ? new Date(resp.scan_1_date).toLocaleDateString() : ''}</span>`;
+                html += `<span>Current: <b style="color:var(--text-secondary);">${s2 ? escapeHtml(s2.target) : scan2.slice(0,8)}</b> ${resp.scan_2_date ? new Date(resp.scan_2_date).toLocaleDateString() : ''}</span>`;
+                html += '</div>';
+
+                // Summary stats
+                html += '<div class="compare-results">';
                 html += `<div class="compare-stat new"><div class="value">${resp.new_findings}</div><div class="label">New</div></div>`;
                 html += `<div class="compare-stat fixed"><div class="value">${resp.fixed_findings}</div><div class="label">Fixed</div></div>`;
                 html += `<div class="compare-stat unchanged"><div class="value">${resp.unchanged_findings}</div><div class="label">Unchanged</div></div>`;
@@ -8293,20 +8309,26 @@
                 }
 
                 // Differences list
-                if (resp.differences && resp.differences.length) {
+                const actionable = resp.differences ? resp.differences.filter(d => d.status !== 'unchanged') : [];
+                if (actionable.length) {
                     html += '<div class="finding-section"><div class="finding-section-title">Differences</div>';
                     html += '<div style="max-height:300px;overflow-y:auto;">';
                     const diffColors = { new: '#e07850', fixed: '#7FFF00', changed: '#FFD700', unchanged: 'var(--text-muted)' };
                     const diffIcons = { new: '+', fixed: '\u2713', changed: '\u0394', unchanged: '=' };
-                    resp.differences.filter(d => d.status !== 'unchanged').forEach(d => {
-                        html += `<div style="display:flex;gap:0.5rem;align-items:center;padding:0.25rem 0;font-size:0.8125rem;border-bottom:1px solid var(--border);">
+                    actionable.forEach(d => {
+                        html += `<div class="search-result-item" style="display:flex;gap:0.5rem;align-items:center;padding:0.375rem 0.25rem;font-size:0.8125rem;border-bottom:1px solid var(--border);cursor:pointer;" onclick="hideModal('scanCompareModal');setTimeout(()=>viewFindingDetail('${d.finding_id}'),200);">
                             <span class="mono" style="color:${diffColors[d.status]};min-width:1rem;">${diffIcons[d.status]}</span>
                             <span class="badge badge-${({critical:'error',high:'warning',medium:'info',low:'success',info:'info'})[d.severity] || 'info'}" style="font-size:0.625rem;">${d.severity}</span>
-                            <span style="color:var(--text-secondary);">${escapeHtml(d.title)}</span>
-                            <span class="mono" style="font-size:0.625rem;color:${diffColors[d.status]};margin-left:auto;">${d.status}</span>
+                            <span style="color:var(--text-secondary);flex:1;">${escapeHtml(d.title)}</span>
+                            <span class="mono" style="font-size:0.625rem;color:${diffColors[d.status]};">${d.status}</span>
                         </div>`;
                     });
                     html += '</div></div>';
+                } else if (resp.new_findings === 0 && resp.fixed_findings === 0 && resp.changed_findings === 0 && resp.unchanged_findings === 0) {
+                    // No findings compared at all — likely missing fingerprints
+                    html += '<div style="text-align:center;padding:1.5rem;color:var(--text-muted);font-size:0.8125rem;">';
+                    html += 'No comparable findings. Findings need fingerprints for comparison — try rescanning both targets.';
+                    html += '</div>';
                 }
 
                 resultsEl.innerHTML = html;
