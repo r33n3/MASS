@@ -4484,7 +4484,7 @@
             <!-- Operator Dropdown Menu -->
             <div class="operator-menu" id="operatorMenu">
                 <div class="operator-menu-header">Operator Settings</div>
-                <div class="operator-menu-item" onclick="showModal('settingsModal'); toggleOperatorMenu();">
+                <div class="operator-menu-item" onclick="showModal('settingsModal'); loadOllamaDefaults(); toggleOperatorMenu();">
                     <span class="menu-icon raw">[*]</span>
                     <span class="menu-label">Settings</span>
                     <span class="menu-shortcut">Ctrl+,</span>
@@ -5475,6 +5475,22 @@
                         <option value="rust">Rust Industrial</option>
                         <option value="midnight">Midnight Blue</option>
                     </select>
+                </div>
+                <hr style="border-color: var(--border); margin: 1rem 0;">
+                <h3 style="color: var(--accent); font-size: 0.9rem; margin-bottom: 0.75rem;">Ollama Instances</h3>
+                <div class="form-group">
+                    <label class="form-label">Destination Ollama (Target/Victim)</label>
+                    <div style="display:flex;gap:0.5rem;">
+                        <input type="text" class="form-input" id="ollamaDestHost" placeholder="http://localhost:11434" style="flex:1;">
+                        <button class="btn btn-secondary btn-sm" onclick="testOllamaConnection('ollamaDestHost')" style="white-space:nowrap;">Test</button>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Attacker Ollama (Chat/Red Team)</label>
+                    <div style="display:flex;gap:0.5rem;">
+                        <input type="text" class="form-input" id="ollamaAttackerHost" placeholder="http://localhost:11435" style="flex:1;">
+                        <button class="btn btn-secondary btn-sm" onclick="testOllamaConnection('ollamaAttackerHost')" style="white-space:nowrap;">Test</button>
+                    </div>
                 </div>
                 <hr style="border-color: var(--border); margin: 1rem 0;">
                 <h3 style="color: var(--accent); font-size: 0.9rem; margin-bottom: 0.75rem;">Chat Assistant</h3>
@@ -7313,11 +7329,17 @@
         }
 
         function getChatConfig() {
+            const provider = localStorage.getItem('mass_chat_provider') || 'ollama';
+            let endpoint = localStorage.getItem('mass_chat_endpoint') || '';
+            // For Ollama provider, use attacker host if no custom endpoint set
+            if (provider === 'ollama' && !endpoint) {
+                endpoint = localStorage.getItem('mass_ollama_attacker_host') || '';
+            }
             return {
-                provider: localStorage.getItem('mass_chat_provider') || 'ollama',
+                provider,
                 model: localStorage.getItem('mass_chat_model') || '',
                 apiKey: localStorage.getItem('mass_chat_api_key') || '',
-                endpoint: localStorage.getItem('mass_chat_endpoint') || '',
+                endpoint,
                 temperature: parseFloat(localStorage.getItem('mass_chat_temperature') || '0.7'),
             };
         }
@@ -7767,8 +7789,56 @@
             else localStorage.removeItem('mass_chat_endpoint');
             localStorage.setItem('mass_chat_temperature', document.getElementById('chatTemperature').value);
 
+            // Ollama instance settings
+            const ollamaDest = document.getElementById('ollamaDestHost').value.trim();
+            if (ollamaDest) localStorage.setItem('mass_ollama_host', ollamaDest);
+            else localStorage.removeItem('mass_ollama_host');
+            const ollamaAttacker = document.getElementById('ollamaAttackerHost').value.trim();
+            if (ollamaAttacker) localStorage.setItem('mass_ollama_attacker_host', ollamaAttacker);
+            else localStorage.removeItem('mass_ollama_attacker_host');
+
             showToast('Settings saved successfully', 'success');
             hideModal('settingsModal');
+        }
+
+        async function testOllamaConnection(inputId) {
+            const host = document.getElementById(inputId).value.trim();
+            if (!host) { showToast('Enter a host URL first', 'warning'); return; }
+            try {
+                const resp = await fetch(`${host.replace(/\/$/, '')}/api/tags`, { signal: AbortSignal.timeout(5000) });
+                if (resp.ok) {
+                    const data = await resp.json();
+                    const count = (data.models || []).length;
+                    showToast(`Connected! ${count} model${count !== 1 ? 's' : ''} available`, 'success');
+                } else {
+                    showToast(`Ollama responded with ${resp.status}`, 'warning');
+                }
+            } catch (e) {
+                showToast(`Cannot reach ${host}: ${e.message}`, 'error');
+            }
+        }
+
+        async function loadOllamaDefaults() {
+            // Pre-populate Ollama host inputs from localStorage or server config
+            const destInput = document.getElementById('ollamaDestHost');
+            const attackerInput = document.getElementById('ollamaAttackerHost');
+            if (destInput) destInput.value = localStorage.getItem('mass_ollama_host') || '';
+            if (attackerInput) attackerInput.value = localStorage.getItem('mass_ollama_attacker_host') || '';
+
+            // If empty, try to fetch server defaults
+            if (!destInput.value || !attackerInput.value) {
+                try {
+                    const config = await apiFetch('/api/v1/chat/config');
+                    if (!destInput.value && config.ollama_destination_host) {
+                        destInput.placeholder = config.ollama_destination_host;
+                    }
+                    if (!attackerInput.value && config.ollama_attacker_host) {
+                        attackerInput.placeholder = config.ollama_attacker_host;
+                    }
+                } catch (e) {
+                    // Non-critical — placeholders stay as defaults
+                }
+            }
         }
 
         async function connectApi() {
@@ -9475,6 +9545,7 @@
             if (e.ctrlKey && e.key === ',') {
                 e.preventDefault();
                 showModal('settingsModal');
+                loadOllamaDefaults();
             }
 
             // F1 for help

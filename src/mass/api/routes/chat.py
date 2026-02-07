@@ -524,3 +524,29 @@ async def list_chat_models(
         "provider": provider,
         "models": [{"name": defaults.get("model", "unknown")}],
     }
+
+
+@router.get(
+    "/config",
+    summary="Get current chat and Ollama configuration",
+    description="Returns resolved Ollama hosts and provider availability for the settings UI.",
+)
+async def get_chat_config(tenant: CurrentTenantDep) -> dict[str, Any]:
+    """Return current resolved configuration for Ollama and providers."""
+    ollama_dest = os.getenv("OLLAMA_HOST", "") or "http://ollama:11434"
+    ollama_attacker = os.getenv("OLLAMA_ATTACKER_HOST", "") or "http://ollama-attacker:11434"
+
+    providers = []
+    for name, defaults in _PROVIDER_DEFAULTS.items():
+        has_key = bool(os.getenv(defaults.get("key_env", ""), "")) if "key_env" in defaults else True
+        providers.append({
+            "name": name,
+            "has_key": has_key,
+            "default_model": defaults.get("model", ""),
+        })
+
+    return {
+        "ollama_destination_host": ollama_dest,
+        "ollama_attacker_host": ollama_attacker,
+        "providers": providers,
+    }
