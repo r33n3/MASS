@@ -128,6 +128,7 @@ class MassSettings(BaseSettings):
         case_sensitive=False,
         env_file=".env",
         env_file_encoding="utf-8",
+        extra="ignore",
     )
 
     # Application

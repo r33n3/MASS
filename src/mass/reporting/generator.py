@@ -117,6 +117,8 @@ class ReportGenerator:
         scan_result: ScanResult | None = None,
         compliance_result: AssessmentResult | None = None,
         metadata: dict[str, Any] | None = None,
+        verdict: dict[str, Any] | None = None,
+        threat_model: dict[str, Any] | None = None,
     ) -> GeneratedReport:
         """Generate a report in the specified format.
 
@@ -127,6 +129,8 @@ class ReportGenerator:
             scan_result: Optional scan result.
             compliance_result: Optional compliance assessment.
             metadata: Optional additional metadata.
+            verdict: Optional Final Verdict Judge assessment.
+            threat_model: Optional STRIDE-AI threat model.
 
         Returns:
             GeneratedReport with content.
@@ -139,12 +143,14 @@ class ReportGenerator:
             filename = f"mass_report_{timestamp}.sarif"
         elif format == ReportFormat.HTML:
             content = self._html.format(
-                findings, scan_id, compliance_result, metadata
+                findings, scan_id, compliance_result, metadata,
+                verdict=verdict, threat_model=threat_model,
             )
             filename = f"mass_report_{timestamp}.html"
         elif format == ReportFormat.JSON:
             content = self._json.format_to_string(
-                findings, scan_id, scan_result, compliance_result, metadata
+                findings, scan_id, scan_result, compliance_result, metadata,
+                verdict=verdict, threat_model=threat_model,
             )
             filename = f"mass_report_{timestamp}.json"
         elif format == ReportFormat.PDF:

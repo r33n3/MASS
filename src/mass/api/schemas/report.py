@@ -18,6 +18,7 @@ class ReportCreate(BaseModel):
     format: str = Field(default="html", description="Output format: html, pdf, sarif, json, markdown, csv, junit")
     include_evidence: bool = Field(default=True, description="Include evidence in report")
     include_remediation: bool = Field(default=True, description="Include remediation guidance")
+    include_threat_model: bool = Field(default=True, description="Include verdict and threat model sections")
     frameworks: list[str] | None = Field(default=None, description="Compliance frameworks to include")
 
 

@@ -18,7 +18,7 @@ from rich.panel import Panel
 
 app = typer.Typer(
     name="mass",
-    help="MASS - Model Analysis Security & Safety",
+    help="MASS - Model & Application Security Suite",
     no_args_is_help=True,
 )
 
@@ -38,9 +38,9 @@ app.add_typer(report_app, name="report")
 
 @app.callback()
 def callback() -> None:
-    """MASS - Model Analysis Security & Safety.
+    """MASS - Model & Application Security Suite.
 
-    Comprehensive AI deployment security analysis platform.
+    Comprehensive AI deployment security platform.
     """
     pass
 

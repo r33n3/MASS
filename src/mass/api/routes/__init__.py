@@ -16,6 +16,9 @@ from mass.api.routes import (
     scan_targets,
     interrogation,
     mcp_interrogation,
+    chat,
+    targets,
+    docs,
 )
 
 __all__ = [
@@ -34,4 +37,7 @@ __all__ = [
     "scan_targets",
     "interrogation",
     "mcp_interrogation",
+    "chat",
+    "targets",
+    "docs",
 ]

@@ -17,6 +17,8 @@ from mass.sdk.models import (
     ScanSummary,
     ComplianceStatus,
     RiskAssessment,
+    VerdictSummary,
+    ThreatModelSummary,
 )
 from mass.sdk.exceptions import ScanError, ConfigurationError, ValidationError
 
@@ -339,6 +341,77 @@ class MASSClient:
                 recommendations=[],
             )
         return risk
+
+    def get_scan_verdict(self, scan_id: str) -> VerdictSummary | None:
+        """Get the verdict for a completed scan.
+
+        Loads the full verdict from the API/database for a scan
+        that has completed the Final Judge phase.
+
+        Args:
+            scan_id: The scan ID to retrieve verdict for.
+
+        Returns:
+            VerdictSummary if available, None otherwise.
+        """
+        try:
+            import json
+            from mass.storage.database import get_sync_session
+            from mass.storage.models.deployment import Scan
+
+            with get_sync_session() as session:
+                scan = session.query(Scan).filter(Scan.id == scan_id).first()
+                if not scan or not scan.verdict:
+                    return None
+                data = json.loads(scan.verdict)
+                return VerdictSummary(
+                    risk_level=data.get("risk_level", "unknown"),
+                    confidence=data.get("confidence", 0.0),
+                    overall_assessment=data.get("overall_assessment", ""),
+                    executive_summary=data.get("executive_summary", ""),
+                    narrative=data.get("narrative", ""),
+                    key_themes=data.get("key_themes", []),
+                    recommendations_count=len(data.get("recommendations", [])),
+                    attack_chains_count=len(data.get("attack_chains", [])),
+                    raw=data,
+                )
+        except Exception:
+            return None
+
+    def get_scan_threat_model(self, scan_id: str) -> ThreatModelSummary | None:
+        """Get the threat model for a completed scan.
+
+        Loads the STRIDE-AI threat model from the API/database for a scan
+        that has completed the threat modeling phase.
+
+        Args:
+            scan_id: The scan ID to retrieve threat model for.
+
+        Returns:
+            ThreatModelSummary if available, None otherwise.
+        """
+        try:
+            import json
+            from mass.storage.database import get_sync_session
+            from mass.storage.models.deployment import Scan
+
+            with get_sync_session() as session:
+                scan = session.query(Scan).filter(Scan.id == scan_id).first()
+                if not scan or not scan.threat_model:
+                    return None
+                data = json.loads(scan.threat_model)
+                return ThreatModelSummary(
+                    overall_risk_level=data.get("overall_risk_level", "unknown"),
+                    total_threats=len(data.get("threats", [])),
+                    data_classification=data.get("data_classification", "internal"),
+                    threats_by_stride=data.get("threat_counts_by_stride", {}),
+                    threats_by_severity=data.get("threat_counts_by_severity", {}),
+                    top_risks=data.get("top_risks", []),
+                    phases_completed=data.get("phases_completed", []),
+                    raw=data,
+                )
+        except Exception:
+            return None
 
 
 # Alias for convenience

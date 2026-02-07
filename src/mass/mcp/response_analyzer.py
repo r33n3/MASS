@@ -181,7 +181,12 @@ class ResponseAnalyzer:
                         "ratio": duration_ms / baseline.avg_response_time_ms,
                     },
                     tool_name=tool_name,
-                    recommendation="Review for time-based blind injection vulnerabilities",
+                    recommendation=(
+                        "Time-Based Blind Injection Remediation: This timing anomaly may indicate "
+                        "a time-based blind SQL injection or similar vulnerability. Review all "
+                        "database queries for proper parameterization. Implement query timeouts "
+                        "and monitor for unusual execution times."
+                    ),
                 )
         return None
 
@@ -212,7 +217,12 @@ class ResponseAnalyzer:
                     "ratio": ratio,
                 },
                 tool_name=tool_name,
-                recommendation="Review for SQL injection or data dump vulnerabilities",
+                recommendation=(
+                    "Response Size Anomaly Remediation: Unusually large responses may indicate "
+                    "SQL Injection (SQLi) data exfiltration or unintended data exposure. Review "
+                    "query result limiting, implement pagination, and ensure proper access "
+                    "controls to prevent unauthorized bulk data retrieval."
+                ),
             )
 
         return None
@@ -260,7 +270,13 @@ class ResponseAnalyzer:
                         "result_sample": result_str[:500],
                     },
                     tool_name=tool_name,
-                    recommendation="Implement input validation and output sanitization",
+                    recommendation=(
+                        "Restriction Bypass Remediation: The tool appears to have bypassed "
+                        "security restrictions. Implement strict input validation using allowlists. "
+                        "For file operations, use chroot isolation. For network requests, block "
+                        "internal IP ranges and metadata endpoints. Sanitize all output to prevent "
+                        "sensitive data exposure."
+                    ),
                 )
 
         return None
@@ -299,7 +315,12 @@ class ResponseAnalyzer:
                         "result_sample": result_str[:500],
                     },
                     tool_name=tool_name,
-                    recommendation="Review tool implementation for unintended side effects",
+                    recommendation=(
+                        "Extra Action Remediation: The tool performed actions beyond its expected "
+                        "scope. This may indicate Confused Deputy or Privilege Escalation issues. "
+                        "Review tool permissions and implement the principle of least privilege. "
+                        "Add explicit action validation and audit logging for all operations."
+                    ),
                 )
 
         return None
@@ -363,7 +384,12 @@ class ResponseAnalyzer:
                         "result_sample": result_str[:500],
                     },
                     tool_name=tool_name,
-                    recommendation="Review output sanitization and implement data masking",
+                    recommendation=(
+                        "Information Leakage Remediation: Sensitive data (PII, credentials, API keys) "
+                        "detected in tool output. Implement data masking and redaction for sensitive "
+                        "fields. Use tokenization for credentials. Apply output filters to detect "
+                        "and block patterns matching credit cards, SSNs, API keys, and passwords."
+                    ),
                 ))
 
         return anomalies
@@ -401,7 +427,12 @@ class ResponseAnalyzer:
                             "error_sample": error[:500],
                         },
                         tool_name=tool_name,
-                        recommendation="Implement generic error messages for users",
+                        recommendation=(
+                            "Error Disclosure Remediation: Detailed error messages expose internal "
+                            "system information. Implement generic user-facing error messages while "
+                            "logging detailed errors server-side. Never expose stack traces, file "
+                            "paths, database schemas, or version information to end users."
+                        ),
                     )
 
         return None
@@ -447,7 +478,13 @@ class ResponseAnalyzer:
                             "indicator": indicator,
                         },
                         tool_name=tool_name,
-                        recommendation="Implement proper authorization checks and input validation",
+                        recommendation=(
+                            "Confused Deputy Remediation: The tool may have accessed resources using "
+                            "the system's credentials rather than the user's. Implement proper "
+                            "authorization checks at every access point. Validate that requested "
+                            "resources match the user's permissions. Use separate service accounts "
+                            "with minimal privileges for different operations."
+                        ),
                     )
 
         return None
@@ -482,7 +519,13 @@ class ResponseAnalyzer:
                         "result_sample": result_str[:500],
                     },
                     tool_name=tool_name,
-                    recommendation="Implement egress filtering and output monitoring",
+                    recommendation=(
+                        "Data Exfiltration Remediation: Evidence of data being sent to external "
+                        "destinations or encoded for transmission. Implement egress filtering with "
+                        "allowlisted destinations. Monitor for unusual encoding patterns (Base64, "
+                        "hex encoding) in outputs. Add DLP (Data Loss Prevention) controls to "
+                        "detect and block sensitive data leaving the system."
+                    ),
                 )
 
         return None
@@ -517,7 +560,12 @@ class ResponseAnalyzer:
                     "prev_snapshot": prev,
                     "curr_snapshot": curr,
                 },
-                recommendation="Review state management for injection points",
+                recommendation=(
+                    "State Manipulation Remediation: Tool state may have been manipulated through "
+                    "input. Review all state management for injection vulnerabilities. Implement "
+                    "immutable state patterns where possible. Validate state transitions and use "
+                    "cryptographic signatures to detect unauthorized modifications."
+                ),
             ))
 
         # Deleted keys
@@ -530,7 +578,12 @@ class ResponseAnalyzer:
                 evidence={
                     "deleted_keys": list(deleted_keys),
                 },
-                recommendation="Review state persistence and access control",
+                recommendation=(
+                    "State Persistence Remediation: State changes that persist between calls may "
+                    "indicate a state pollution or session fixation vulnerability. Implement proper "
+                    "session isolation. Use unique identifiers for each session. Clear state "
+                    "between operations and implement access controls for persisted data."
+                ),
             ))
 
         return anomalies

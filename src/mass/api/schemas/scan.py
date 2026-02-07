@@ -64,6 +64,35 @@ class ScanSeverityCounts(BaseModel):
     info: int = Field(default=0, description="Informational findings")
 
 
+class VerdictSummary(BaseModel):
+    """Summary of the Final Verdict Judge assessment."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    overall_assessment: str = Field(..., description="One-sentence security verdict")
+    risk_level: str = Field(..., description="Overall risk level: safe, low, medium, high, critical")
+    confidence: float = Field(..., description="Judge confidence (0-1)")
+    narrative: str = Field(..., description="Expert security analysis narrative")
+    key_themes: list[str] = Field(default_factory=list, description="Top security themes identified")
+    executive_summary: str = Field(..., description="Non-technical summary")
+    recommendations_count: int = Field(default=0, description="Number of recommendations")
+    attack_chains_count: int = Field(default=0, description="Number of attack chains identified")
+
+
+class ThreatModelSummary(BaseModel):
+    """Summary of the STRIDE-AI threat model."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    overall_risk_level: str = Field(..., description="Overall risk: safe, low, medium, high, critical")
+    total_threats: int = Field(default=0, description="Total threats identified")
+    threats_by_stride: dict[str, int] = Field(default_factory=dict, description="Threat counts by STRIDE-AI category")
+    threats_by_severity: dict[str, int] = Field(default_factory=dict, description="Threat counts by severity")
+    data_classification: str = Field(default="internal", description="Inferred data classification")
+    phases_completed: list[str] = Field(default_factory=list, description="Scan phases contributing to model")
+    top_risks: list[str] = Field(default_factory=list, description="Top threat IDs by risk score")
+
+
 class ScanResponse(IDMixin, TimestampMixin):
     """Scan response schema."""
 
@@ -86,6 +115,8 @@ class ScanResponse(IDMixin, TimestampMixin):
     )
     triggered_by: str | None = Field(default=None, description="What triggered the scan")
     jobs: list[ScanJobResponse] | None = Field(default=None, description="Individual scan jobs")
+    verdict: VerdictSummary | None = Field(default=None, description="Final Verdict Judge assessment")
+    threat_model: ThreatModelSummary | None = Field(default=None, description="STRIDE-AI threat model summary")
 
 
 class ScanListResponse(BaseModel):

@@ -1,7 +1,8 @@
 """Dashboard application factory.
 
-Creates and configures the FastAPI application for the
-MASS dashboard with all routes and middleware.
+Creates and configures a lightweight FastAPI application that serves
+the MASS dashboard frontend. This is a pure frontend server - all API
+calls from the dashboard go to the main MASS API backend.
 """
 
 from dataclasses import dataclass, field
@@ -10,7 +11,6 @@ from typing import Any
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
 
 
@@ -25,14 +25,11 @@ class DashboardConfig:
 
     # Security
     allowed_origins: list[str] = field(default_factory=lambda: ["*"])
-    api_key: str | None = None
 
     # Paths
     static_dir: Path | None = None
-    templates_dir: Path | None = None
 
     # Features
-    enable_api: bool = True
     enable_ui: bool = True
     enable_websocket: bool = True
 
@@ -42,13 +39,15 @@ class DashboardConfig:
             "host": self.host,
             "port": self.port,
             "debug": self.debug,
-            "enable_api": self.enable_api,
             "enable_ui": self.enable_ui,
         }
 
 
 def create_app(config: DashboardConfig | None = None) -> FastAPI:
     """Create the dashboard FastAPI application.
+
+    This is a frontend-only server. The dashboard HTML/JS connects
+    to the main MASS API backend at a configurable endpoint URL.
 
     Args:
         config: Dashboard configuration.
@@ -60,10 +59,10 @@ def create_app(config: DashboardConfig | None = None) -> FastAPI:
 
     app = FastAPI(
         title="MASS Dashboard",
-        description="Model Analysis Security & Safety Dashboard",
+        description="MASS Dashboard - Model & Application Security Suite",
         version="0.1.0",
-        docs_url="/api/docs" if config.enable_api else None,
-        redoc_url="/api/redoc" if config.enable_api else None,
+        docs_url=None,
+        redoc_url=None,
     )
 
     # Configure CORS
@@ -77,19 +76,24 @@ def create_app(config: DashboardConfig | None = None) -> FastAPI:
 
     # Store config in app state
     app.state.config = config
-    app.state.scan_store = {}  # In-memory scan storage
 
-    # Mount API routes
-    if config.enable_api:
-        from mass.dashboard.api import router as api_router
-        app.include_router(api_router, prefix="/api")
+    # Mount static files for assets (mascot, etc.)
+    project_root = Path(__file__).parent.parent.parent.parent
+    data_dir = project_root / "data"
+    if data_dir.exists():
+        app.mount("/data", StaticFiles(directory=str(data_dir)), name="data")
 
-    # Mount UI routes
+    # Mount dashboard static files (CSS, JS, images)
+    static_dir = config.static_dir or Path(__file__).parent / "static"
+    if static_dir.exists():
+        app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
+    # Mount UI routes (serves index.html)
     if config.enable_ui:
         from mass.dashboard.ui import router as ui_router
         app.include_router(ui_router)
 
-    # WebSocket for real-time updates
+    # WebSocket for real-time updates (proxied or direct)
     if config.enable_websocket:
         from mass.dashboard.websocket import router as ws_router
         app.include_router(ws_router)

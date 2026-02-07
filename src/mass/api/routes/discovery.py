@@ -23,6 +23,14 @@ from mass.api.schemas.discovery import (
     DiscoveredDependency,
     ScanRecommendation,
 )
+from mass.core.filesystem import (
+    AI_FRAMEWORKS,
+    EXCLUDED_DIRS,
+    MCP_PACKAGES,
+    MODEL_EXTENSIONS,
+    scan_directory_quick,
+    walk_with_exclusions,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -181,107 +189,29 @@ async def list_targets(tenant: CurrentTenantDep) -> list[TargetEntry]:
     """List available mounted target directories and GitHub clones."""
     targets: list[TargetEntry] = []
 
-    def _scan_entry(entry: Path, source: str = "local") -> TargetEntry | None:
-        if not entry.is_dir():
-            return None
-        file_count = 0
-        has_models = False
-        has_code = False
-        try:
-            for dirpath, dirnames, filenames in os.walk(str(entry), topdown=True):
-                dirnames[:] = [
-                    d for d in dirnames
-                    if d not in EXCLUDED_DIRS and not d.endswith(".egg-info")
-                ]
-                for fn in filenames:
-                    file_count += 1
-                    ext = os.path.splitext(fn)[1].lower()
-                    if ext in MODEL_EXTENSIONS:
-                        has_models = True
-                    if ext in {".py", ".js", ".ts", ".jsx", ".tsx"}:
-                        has_code = True
-                    if file_count > 5000:
-                        break
-                if file_count > 5000:
-                    break
-        except PermissionError:
-            pass
-        return TargetEntry(
-            name=entry.name,
-            path=str(entry),
-            file_count=file_count,
-            has_models=has_models,
-            has_code=has_code,
-            source=source,
-        )
-
     if not TARGETS_BASE.is_dir():
         return targets
 
-    # List mounted targets (excluding _github_clones)
+    # List mounted targets (excluding internal dirs prefixed with _)
     for entry in sorted(TARGETS_BASE.iterdir()):
         if entry.name.startswith("_"):
             continue
-        target = _scan_entry(entry, "local")
-        if target:
-            targets.append(target)
+        info = scan_directory_quick(entry)
+        if info:
+            targets.append(TargetEntry(**info, source="local"))
 
     # List GitHub clones
     if GITHUB_CLONES_DIR.is_dir():
         for entry in sorted(GITHUB_CLONES_DIR.iterdir()):
-            target = _scan_entry(entry, "github")
-            if target:
-                targets.append(target)
+            info = scan_directory_quick(entry)
+            if info:
+                targets.append(TargetEntry(**info, source="github"))
 
     return targets
 
-# Known AI/ML frameworks to detect in dependencies
-AI_FRAMEWORKS = {
-    "langchain", "langchain-core", "langchain-community", "langgraph",
-    "openai", "anthropic", "cohere", "huggingface-hub",
-    "transformers", "torch", "pytorch", "tensorflow", "keras", "jax",
-    "crewai", "autogen", "llama-index", "llamaindex",
-    "chromadb", "pinecone-client", "weaviate-client", "qdrant-client",
-    "sentence-transformers", "tiktoken", "tokenizers",
-    "gradio", "streamlit",
-    "ollama", "llama-cpp-python", "ctransformers",
-    "diffusers", "accelerate", "peft", "trl",
-    "guidance", "dspy-ai", "instructor",
-    "mcp",
-    # MCP (Model Context Protocol) packages
-    "@modelcontextprotocol/sdk",
-    "@modelcontextprotocol/server-node",
-    "@modelcontextprotocol/server-deno",
-    "mcp-python",
-    "mcp-sdk",
-}
 
-# MCP-related packages for detection
-MCP_PACKAGES = {
-    "@modelcontextprotocol/sdk",
-    "@modelcontextprotocol/server-node",
-    "@modelcontextprotocol/server-deno",
-    "mcp-python",
-    "mcp-sdk",
-    "mcp",
-}
-
-# Model file extensions
-MODEL_EXTENSIONS = {
-    ".gguf", ".pt", ".pth", ".bin", ".safetensors",
-    ".onnx", ".pb", ".h5", ".keras", ".tflite",
-    ".mlmodel", ".pkl", ".joblib",
-}
-
-# Directories to exclude (same as ScanService)
-EXCLUDED_DIRS = {
-    ".git", "__pycache__", "node_modules", ".venv", "venv", "env",
-    ".tox", ".mypy_cache", ".pytest_cache", ".ruff_cache",
-    "build", "dist", "eggs",
-    "llama.cpp", "sd.cpp", "whisper.cpp",
-    "bin", "obj", "target", "out",
-    "vendor", "third_party", "external",
-}
+# Constants AI_FRAMEWORKS, MCP_PACKAGES, MODEL_EXTENSIONS, EXCLUDED_DIRS
+# are imported from mass.core.filesystem (single source of truth).
 
 
 @router.post(
@@ -325,18 +255,7 @@ async def discover_deployment(
         )
 
     # Walk once with exclusions
-    all_files: list[str] = []
-    for dirpath, dirnames, filenames in os.walk(str(target_path), topdown=True):
-        dirnames[:] = [
-            d for d in dirnames
-            if d not in EXCLUDED_DIRS and not d.endswith(".egg-info")
-        ]
-        rel_dir = os.path.relpath(dirpath, str(target_path))
-        for filename in filenames:
-            if rel_dir == ".":
-                all_files.append(filename)
-            else:
-                all_files.append(f"{rel_dir}/{filename}".replace("\\", "/"))
+    all_files = walk_with_exclusions(target_path)
 
     # Run component discovery
     from mass.analyzers.deployment.discovery import ComponentDiscovery

@@ -103,6 +103,10 @@ class ProbeExecutorConfig:
     continue_on_error: bool = True
     # Model name for finding labels
     model_name: str = "unknown"
+    # Persistent variant probing: when a model refuses, retry with
+    # jailbreak variant techniques to test resistance
+    enable_variants: bool = False
+    max_variants_per_prompt: int = 3
 
 
 @dataclass
@@ -378,6 +382,10 @@ class ProbeExecutor:
     ) -> None:
         """Execute a single prompt and analyze the response.
 
+        When persistent variant probing is enabled and the model refuses
+        (SAFE detection), retries with jailbreak variant techniques to
+        test resistance. A successful bypass escalates to HIGH+ severity.
+
         Args:
             probe: The parent probe.
             probe_prompt: The prompt to send.
@@ -400,23 +408,24 @@ class ProbeExecutor:
             return
 
         # Run detectors on the response
-        is_vulnerable = False
-        best_detection = None
+        is_vulnerable, best_detection = self._run_detectors(
+            probe_prompt.text, runner_result.response, detectors,
+        )
 
-        for detector in detectors:
-            try:
-                detection = detector.detect(
-                    prompt=probe_prompt.text,
-                    response=runner_result.response,
-                )
-
-                if detection.is_vulnerable:
-                    is_vulnerable = True
-                    if best_detection is None or detection.confidence > best_detection.confidence:
-                        best_detection = detection
-
-            except Exception as e:
-                logger.debug(f"Detector {detector.name} error: {e}")
+        # Persistent variant probing: if model refused and variants enabled,
+        # try jailbreak techniques to test resistance
+        successful_technique = None
+        if (
+            not is_vulnerable
+            and self.config.enable_variants
+            and self.config.max_variants_per_prompt > 0
+        ):
+            variant_result = self._try_variants(
+                probe, probe_prompt, detectors, result,
+            )
+            if variant_result is not None:
+                is_vulnerable = True
+                runner_result, best_detection, successful_technique = variant_result
 
         # Record probe result (thread-safe)
         probe_result = ProbeResult(
@@ -432,8 +441,87 @@ class ProbeExecutor:
         finding = None
         if is_vulnerable:
             finding = self._create_finding(probe, probe_prompt, runner_result, best_detection)
+            # If a variant technique succeeded, enrich the finding
+            if successful_technique and finding:
+                finding.metadata["successful_technique"] = successful_technique
+                finding.metadata["variant_bypass"] = True
+                # Escalate severity: variant bypass is at least HIGH
+                if finding.severity in (Severity.LOW, Severity.MEDIUM, Severity.INFO):
+                    finding.severity = Severity.HIGH
+                    finding.description += (
+                        f" Model initially refused but was bypassed using "
+                        f"'{successful_technique}' variant technique."
+                    )
 
         result.add_probe_result(probe_result, finding)
+
+    def _run_detectors(
+        self,
+        prompt_text: str,
+        response: str,
+        detectors: list,
+    ) -> tuple[bool, Any]:
+        """Run all detectors on a response and return (is_vulnerable, best_detection)."""
+        is_vulnerable = False
+        best_detection = None
+
+        for detector in detectors:
+            try:
+                detection = detector.detect(prompt=prompt_text, response=response)
+                if detection.is_vulnerable:
+                    is_vulnerable = True
+                    if best_detection is None or detection.confidence > best_detection.confidence:
+                        best_detection = detection
+            except Exception as e:
+                logger.debug(f"Detector {detector.name} error: {e}")
+
+        return is_vulnerable, best_detection
+
+    def _try_variants(
+        self,
+        probe: BaseProbe,
+        probe_prompt: ProbePrompt,
+        detectors: list,
+        result: ProbeExecutorResult,
+    ) -> tuple[Any, Any, str] | None:
+        """Try variant techniques to bypass a model's refusal.
+
+        Returns (runner_result, best_detection, technique_name) on first
+        successful bypass, or None if all variants were also refused.
+        """
+        from mass.probes.variants import generate_variants, ALL_TECHNIQUES
+        import random as _rand
+
+        # Pick a random subset of techniques to try
+        techniques = list(ALL_TECHNIQUES)
+        _rand.shuffle(techniques)
+        techniques = techniques[: self.config.max_variants_per_prompt]
+
+        for variant in generate_variants(
+            probe_prompt.text,
+            techniques=techniques,
+            max_variants=self.config.max_variants_per_prompt,
+        ):
+            result.increment_prompts_sent()
+
+            vr = self.runner.run(
+                prompt=variant.text,
+                system_prompt=self.config.system_prompt,
+            )
+
+            if not vr.is_success:
+                result.increment_prompts_failed()
+                continue
+
+            vuln, det = self._run_detectors(variant.text, vr.response, detectors)
+            if vuln:
+                logger.info(
+                    "Variant bypass: '%s' technique succeeded for probe %s",
+                    variant.technique.value, probe.name,
+                )
+                return vr, det, variant.technique.value
+
+        return None
 
     @staticmethod
     def _scale_severity(

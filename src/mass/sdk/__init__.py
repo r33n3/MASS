@@ -34,6 +34,8 @@ from mass.sdk.models import (
     ScanSummary,
     ComplianceStatus,
     RiskAssessment,
+    VerdictSummary,
+    ThreatModelSummary,
 )
 from mass.sdk.exceptions import (
     MASSError,
@@ -57,6 +59,8 @@ __all__ = [
     "ScanSummary",
     "ComplianceStatus",
     "RiskAssessment",
+    "VerdictSummary",
+    "ThreatModelSummary",
     # Exceptions
     "MASSError",
     "ScanError",

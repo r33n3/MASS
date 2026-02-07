@@ -13,10 +13,10 @@ NC='\033[0m' # No Color
 
 echo -e "${BLUE}"
 cat << "EOF"
-╔═══════════════════════════════════════════╗
-║   MASS - Model Analysis Security & Safety ║
-║   Local Development Environment           ║
-╚═══════════════════════════════════════════╝
+╔══════════════════════════════════════════════════╗
+║   MASS - Model & Application Security Suite      ║
+║   Local Development Environment                  ║
+╚══════════════════════════════════════════════════╝
 EOF
 echo -e "${NC}"
 

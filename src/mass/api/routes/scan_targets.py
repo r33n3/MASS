@@ -29,6 +29,7 @@ from mass.api.dependencies import (
 )
 from mass.api.schemas.deployment import MCPServerConfig, TargetType
 from mass.core.config import get_settings
+from mass.core.target_helpers import infer_deployment_type, validate_target_type_requirements
 from mass.core.types import ScanStatus
 from mass.storage.models.deployment import Deployment, Scan
 
@@ -173,7 +174,17 @@ async def create_scan_target(
         request.source_path = str(translated_path)
 
     # Validate request based on target_type
-    _validate_target_request(request)
+    validate_target_type_requirements(
+        request.target_type,
+        source_path=request.source_path,
+        target_files=request.target_files,
+        content=request.content,
+        mcp_servers=request.mcp_servers,
+        system_prompt=request.system_prompt,
+        model_endpoint=request.model_endpoint,
+        model_provider=request.model_provider,
+        agent_url=request.agent_url,
+    )
 
     # Build deployment metadata
     meta_data: dict[str, Any] = {
@@ -217,7 +228,7 @@ async def create_scan_target(
     deployment = Deployment(
         tenant_id=tenant.tenant_id,
         name=request.name,
-        deployment_type=_infer_deployment_type(request.target_type),
+        deployment_type=infer_deployment_type(request.target_type),
         source_path=request.source_path,
         meta=json.dumps(meta_data),
     )
@@ -312,80 +323,5 @@ async def create_scan_target(
     )
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _validate_target_request(request: ScanTargetRequest) -> None:
-    """Validate the request based on target_type."""
-    tt = request.target_type
-
-    if tt == TargetType.DEPLOYMENT:
-        if not request.source_path:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="source_path is required for deployment target type",
-            )
-
-    elif tt == TargetType.MODEL_FILE:
-        if not request.source_path and not request.target_files:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="source_path or target_files required for model_file target",
-            )
-
-    elif tt == TargetType.MCP_SERVER:
-        if not request.source_path and not request.content and not request.mcp_servers:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    "Provide source_path (MCP config file), content (inline JSON), "
-                    "or mcp_servers for mcp_server target"
-                ),
-            )
-
-    elif tt == TargetType.SKILL_FILE:
-        if not request.source_path and not request.content:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="source_path or content required for skill_file target",
-            )
-
-    elif tt == TargetType.INSTRUCTION_FILE:
-        if not request.source_path and not request.content and not request.system_prompt:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    "Provide source_path, content, or system_prompt "
-                    "for instruction_file target"
-                ),
-            )
-
-    elif tt == TargetType.MODEL_ENDPOINT:
-        if not request.model_endpoint and not request.model_provider:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="model_endpoint or model_provider required for model_endpoint target",
-            )
-
-    elif tt == TargetType.AGENT_ENDPOINT:
-        if not request.agent_url and not request.model_endpoint:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    "agent_url or model_endpoint required for agent_endpoint target"
-                ),
-            )
-
-
-def _infer_deployment_type(target_type: TargetType) -> str:
-    """Map target type to deployment_type column value."""
-    return {
-        TargetType.DEPLOYMENT: "other",
-        TargetType.MCP_SERVER: "other",
-        TargetType.MODEL_FILE: "other",
-        TargetType.SKILL_FILE: "agent",
-        TargetType.INSTRUCTION_FILE: "other",
-        TargetType.MODEL_ENDPOINT: "api",
-        TargetType.AGENT_ENDPOINT: "agent",
-    }.get(target_type, "other")
+# Validation and deployment type inference are handled by
+# mass.core.target_helpers (validate_target_type_requirements, infer_deployment_type).

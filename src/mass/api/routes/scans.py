@@ -7,7 +7,7 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, status
 
 from mass.api.dependencies import (
     CurrentTenantDep,
@@ -29,6 +29,8 @@ from mass.api.schemas.scan import (
     ScanCancelResponse,
     ScanSeverityCounts,
     ScanJobResponse,
+    VerdictSummary,
+    ThreatModelSummary,
 )
 from mass.api.schemas.deployment import DeploymentSummary
 from mass.api.schemas.finding import FindingResponse, FindingListResponse, FindingSummary
@@ -73,6 +75,41 @@ def _scan_to_response(scan: Scan, include_jobs: bool = False) -> ScanResponse:
     # Model doesn't have jobs relationship in current implementation
     jobs = None
 
+    # Parse verdict JSON if available
+    verdict_summary = None
+    if scan.verdict:
+        try:
+            verdict_data = json.loads(scan.verdict)
+            verdict_summary = VerdictSummary(
+                overall_assessment=verdict_data.get("overall_assessment", ""),
+                risk_level=verdict_data.get("risk_level", "unknown"),
+                confidence=verdict_data.get("confidence", 0.0),
+                narrative=verdict_data.get("narrative", ""),
+                key_themes=verdict_data.get("key_themes", []),
+                executive_summary=verdict_data.get("executive_summary", ""),
+                recommendations_count=len(verdict_data.get("recommendations", [])),
+                attack_chains_count=len(verdict_data.get("attack_chains", [])),
+            )
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    # Parse threat model JSON if available
+    threat_model_summary = None
+    if scan.threat_model:
+        try:
+            tm_data = json.loads(scan.threat_model)
+            threat_model_summary = ThreatModelSummary(
+                overall_risk_level=tm_data.get("overall_risk_level", "safe"),
+                total_threats=len(tm_data.get("threats", [])),
+                threats_by_stride=tm_data.get("threat_counts_by_stride", {}),
+                threats_by_severity=tm_data.get("threat_counts_by_severity", {}),
+                data_classification=tm_data.get("data_classification", "internal"),
+                phases_completed=tm_data.get("phases_completed", []),
+                top_risks=tm_data.get("top_risks", [])[:5],
+            )
+        except (json.JSONDecodeError, TypeError):
+            pass
+
     return ScanResponse(
         id=scan.id,
         deployment=deployment_summary,
@@ -95,6 +132,8 @@ def _scan_to_response(scan: Scan, include_jobs: bool = False) -> ScanResponse:
         ),
         triggered_by=None,  # Model doesn't track triggered_by
         jobs=jobs,
+        verdict=verdict_summary,
+        threat_model=threat_model_summary,
         created_at=scan.created_at,
         updated_at=scan.updated_at,
     )
@@ -111,7 +150,7 @@ async def list_scans(
     scan_repo: ScanRepo,
     pagination: PaginationDep,
     deployment_id: str | None = None,
-    status_filter: ScanStatus | None = None,
+    status_filter: ScanStatus | None = Query(None, alias="status", description="Filter by scan status"),
 ) -> ScanListResponse:
     """List all scans for the authenticated tenant."""
     filters = {"tenant_id": tenant.tenant_id}
@@ -273,6 +312,86 @@ async def get_scan(
         )
 
     return _scan_to_response(scan, include_jobs=include_jobs)
+
+
+@router.get(
+    "/{scan_id}/verdict",
+    summary="Get scan verdict",
+    description="Get the full Final Verdict Judge assessment for a completed scan.",
+)
+async def get_scan_verdict(
+    scan_id: str,
+    tenant: CurrentTenantDep,
+    scan_repo: ScanRepo,
+) -> dict:
+    """Get the full verdict analysis for a scan.
+
+    Returns the complete FinalVerdict including attack chains,
+    severity adjustments, and detailed recommendations.
+    """
+    import json
+
+    scan = await scan_repo.get(scan_id)
+
+    if not scan or scan.tenant_id != tenant.tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Scan not found",
+        )
+
+    if not scan.verdict:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No verdict available for this scan",
+        )
+
+    try:
+        return json.loads(scan.verdict)
+    except (json.JSONDecodeError, TypeError):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to parse verdict data",
+        )
+
+
+@router.get(
+    "/{scan_id}/threat-model",
+    summary="Get scan threat model",
+    description="Get the STRIDE-AI threat model for a completed scan.",
+)
+async def get_scan_threat_model(
+    scan_id: str,
+    tenant: CurrentTenantDep,
+    scan_repo: ScanRepo,
+) -> dict:
+    """Get the progressive AI threat model for a scan.
+
+    Returns the complete STRIDE-AI threat model including trust boundaries,
+    data flows, risk matrix, and compliance mappings.
+    """
+    import json
+
+    scan = await scan_repo.get(scan_id)
+
+    if not scan or scan.tenant_id != tenant.tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Scan not found",
+        )
+
+    if not scan.threat_model:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No threat model available for this scan",
+        )
+
+    try:
+        return json.loads(scan.threat_model)
+    except (json.JSONDecodeError, TypeError):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to parse threat model data",
+        )
 
 
 @router.get(

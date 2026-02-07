@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "mass"
 version = "0.1.0"
-description = "Model Analysis Security & Safety - Comprehensive AI deployment security analysis platform"
+description = "Model & Application Security Suite - Comprehensive AI deployment security platform"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10"

@@ -1,4 +1,4 @@
-# MASS - Model Analysis Security & Safety
+# MASS - Model & Application Security Suite
 
 [![CI](https://github.com/r33n3/MASS/actions/workflows/ci.yml/badge.svg)](https://github.com/r33n3/MASS/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/r33n3/MASS/branch/main/graph/badge.svg)](https://codecov.io/gh/r33n3/MASS)
@@ -6,9 +6,9 @@
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 
-**Comprehensive AI deployment security analysis platform.**
+**Comprehensive AI deployment security platform that discovers, analyzes, tests, and remediates vulnerabilities across models, tools, prompts, infrastructure, and agent workflows.**
 
-MASS is an API-first, cloud-native platform for holistic AI deployment security analysis. It goes beyond model-only testing to analyze entire deployments including system prompts, MCP servers, skills, knowledge bases, and infrastructure.
+MASS is an API-first, cloud-native security platform for end-to-end AI deployment validation. It goes beyond model-only testing to discover, scan, interrogate, and remediate entire deployments including system prompts, MCP servers, agent workflows, knowledge bases, and infrastructure.
 
 ## Key Features
 

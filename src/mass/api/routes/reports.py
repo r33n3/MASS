@@ -12,6 +12,7 @@ from fastapi.responses import Response
 
 from mass.api.dependencies import (
     CurrentTenantDep,
+    DBSession,
     ScanRepo,
     ReportRepo,
     FindingRepo,
@@ -183,6 +184,22 @@ async def generate_report(
     }
     report_format = format_map.get(request.format.lower(), ReportFormat.JSON)
 
+    # Load verdict and threat model from scan record (if requested)
+    import json as _json
+    verdict_data = None
+    threat_model_data = None
+    if request.include_threat_model:
+        if scan.verdict:
+            try:
+                verdict_data = _json.loads(scan.verdict)
+            except (ValueError, TypeError):
+                pass
+        if scan.threat_model:
+            try:
+                threat_model_data = _json.loads(scan.threat_model)
+            except (ValueError, TypeError):
+                pass
+
     # Generate the report content (pure computation, no DB)
     try:
         config = ReportConfig(
@@ -196,6 +213,8 @@ async def generate_report(
             findings=core_findings,
             scan_id=request.scan_id,
             metadata={"scan_id": scan.id, "profile": scan.profile},
+            verdict=verdict_data,
+            threat_model=threat_model_data,
         )
 
         # Save to data directory
@@ -360,6 +379,7 @@ async def compare_scans(
     request: CompareRequest,
     tenant: CurrentTenantDep,
     scan_repo: ScanRepo,
+    db: DBSession,
 ) -> CompareResponse:
     """Compare findings between two scans."""
     # Verify both scans exist and belong to tenant
@@ -378,20 +398,63 @@ async def compare_scans(
             detail=f"Scan {request.scan_id_2} not found",
         )
 
-    # TODO: Implement actual comparison logic
-    # For now, return a placeholder response
+    from mass.api.services.finding_lifecycle import compare_scan_findings
+
+    diff = await compare_scan_findings(db, request.scan_id_1, request.scan_id_2)
+
+    differences: list[FindingDiff] = []
+
+    for f in diff["new"]:
+        differences.append(FindingDiff(
+            finding_id=f.id,
+            title=f.title,
+            severity=f.severity,
+            status="new",
+            scan_1_state=None,
+            scan_2_state={"severity": f.severity, "status": f.status},
+        ))
+
+    for f in diff["fixed"]:
+        differences.append(FindingDiff(
+            finding_id=f.id,
+            title=f.title,
+            severity=f.severity,
+            status="fixed",
+            scan_1_state={"severity": f.severity, "status": f.status},
+            scan_2_state=None,
+        ))
+
+    for f in diff["unchanged"]:
+        differences.append(FindingDiff(
+            finding_id=f.id,
+            title=f.title,
+            severity=f.severity,
+            status="unchanged",
+            scan_1_state={"severity": f.severity, "status": f.status},
+            scan_2_state={"severity": f.severity, "status": f.status},
+        ))
+
+    for old_f, new_f in diff["changed"]:
+        differences.append(FindingDiff(
+            finding_id=new_f.id,
+            title=new_f.title,
+            severity=new_f.severity,
+            status="changed",
+            scan_1_state={"severity": old_f.severity, "status": old_f.status},
+            scan_2_state={"severity": new_f.severity, "status": new_f.status},
+        ))
 
     return CompareResponse(
         scan_id_1=request.scan_id_1,
         scan_id_2=request.scan_id_2,
         scan_1_date=scan1.created_at,
         scan_2_date=scan2.created_at,
-        new_findings=0,
-        fixed_findings=0,
-        unchanged_findings=0,
-        changed_findings=0,
-        severity_trend={},
-        differences=[],
+        new_findings=len(diff["new"]),
+        fixed_findings=len(diff["fixed"]),
+        unchanged_findings=len(diff["unchanged"]),
+        changed_findings=len(diff["changed"]),
+        severity_trend=diff["severity_trend"],
+        differences=differences,
     )
 
 

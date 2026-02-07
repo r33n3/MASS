@@ -39,6 +39,8 @@ class JsonFormatter:
         scan_result: ScanResult | None = None,
         compliance_result: AssessmentResult | None = None,
         metadata: dict[str, Any] | None = None,
+        verdict: dict[str, Any] | None = None,
+        threat_model: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Generate JSON report from findings.
 
@@ -48,6 +50,8 @@ class JsonFormatter:
             scan_result: Optional scan result.
             compliance_result: Optional compliance assessment.
             metadata: Optional additional metadata.
+            verdict: Optional Final Verdict Judge assessment.
+            threat_model: Optional STRIDE-AI threat model.
 
         Returns:
             Report as dictionary.
@@ -89,6 +93,14 @@ class JsonFormatter:
         # Add compliance result if provided
         if compliance_result:
             report["compliance"] = compliance_result.to_dict()
+
+        # Add verdict if provided
+        if verdict:
+            report["verdict"] = verdict
+
+        # Add threat model if provided
+        if threat_model:
+            report["threat_model"] = threat_model
 
         # Add metadata if provided
         if metadata:
@@ -159,6 +171,8 @@ class JsonFormatter:
         scan_result: ScanResult | None = None,
         compliance_result: AssessmentResult | None = None,
         metadata: dict[str, Any] | None = None,
+        verdict: dict[str, Any] | None = None,
+        threat_model: dict[str, Any] | None = None,
     ) -> str:
         """Generate JSON report as string.
 
@@ -168,12 +182,15 @@ class JsonFormatter:
             scan_result: Optional scan result.
             compliance_result: Optional compliance assessment.
             metadata: Optional additional metadata.
+            verdict: Optional Final Verdict Judge assessment.
+            threat_model: Optional STRIDE-AI threat model.
 
         Returns:
             JSON string.
         """
         report = self.format(
-            findings, scan_id, scan_result, compliance_result, metadata
+            findings, scan_id, scan_result, compliance_result, metadata,
+            verdict=verdict, threat_model=threat_model,
         )
         if self.pretty:
             return json.dumps(report, indent=2, default=str)

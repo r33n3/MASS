@@ -190,6 +190,69 @@ class RiskAssessment:
 
 
 @dataclass
+class VerdictSummary:
+    """Summary of the Final Judge verdict for a scan."""
+
+    risk_level: str  # safe, low, medium, high, critical
+    confidence: float  # 0.0 to 1.0
+    overall_assessment: str
+    executive_summary: str = ""
+    narrative: str = ""
+    key_themes: list[str] = field(default_factory=list)
+    recommendations_count: int = 0
+    attack_chains_count: int = 0
+    raw: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def is_high_risk(self) -> bool:
+        """Check if verdict indicates high risk or above."""
+        return self.risk_level.lower() in ("critical", "high")
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary."""
+        return {
+            "risk_level": self.risk_level,
+            "confidence": self.confidence,
+            "overall_assessment": self.overall_assessment,
+            "executive_summary": self.executive_summary,
+            "key_themes": self.key_themes,
+            "recommendations_count": self.recommendations_count,
+            "attack_chains_count": self.attack_chains_count,
+        }
+
+
+@dataclass
+class ThreatModelSummary:
+    """Summary of the STRIDE-AI threat model for a scan."""
+
+    overall_risk_level: str  # safe, low, medium, high, critical
+    total_threats: int = 0
+    data_classification: str = "internal"
+    threats_by_stride: dict[str, int] = field(default_factory=dict)
+    threats_by_severity: dict[str, int] = field(default_factory=dict)
+    top_risks: list[str] = field(default_factory=list)
+    phases_completed: list[str] = field(default_factory=list)
+    raw: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def is_high_risk(self) -> bool:
+        """Check if threat model indicates high risk or above."""
+        return self.overall_risk_level.lower() in ("critical", "high")
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary."""
+        return {
+            "overall_risk_level": self.overall_risk_level,
+            "total_threats": self.total_threats,
+            "data_classification": self.data_classification,
+            "threats_by_stride": self.threats_by_stride,
+            "threats_by_severity": self.threats_by_severity,
+            "top_risks": self.top_risks,
+            "phases_completed": self.phases_completed,
+        }
+
+
+@dataclass
 class ScanResult:
     """Complete result from a scan.
 
@@ -212,6 +275,10 @@ class ScanResult:
     summary: ScanSummary = field(default_factory=ScanSummary)
     compliance: list[ComplianceStatus] = field(default_factory=list)
     risk: RiskAssessment | None = None
+
+    # Verdict and threat model
+    verdict: VerdictSummary | None = None
+    threat_model: ThreatModelSummary | None = None
 
     # Reports
     reports: dict[str, str] = field(default_factory=dict)  # format -> path
@@ -304,6 +371,8 @@ class ScanResult:
             "summary": self.summary.to_dict(),
             "compliance": [c.to_dict() for c in self.compliance],
             "risk": self.risk.to_dict() if self.risk else None,
+            "verdict": self.verdict.to_dict() if self.verdict else None,
+            "threat_model": self.threat_model.to_dict() if self.threat_model else None,
             "reports": self.reports,
             "errors": self.errors,
         }
@@ -331,5 +400,15 @@ class ScanResult:
 
         if self.risk:
             print(f"\nRisk: {self.risk.level} ({self.risk.score:.2f})")
+
+        if self.verdict:
+            print(f"\nVerdict: {self.verdict.risk_level.upper()} "
+                  f"(confidence: {self.verdict.confidence:.0%})")
+            print(f"  {self.verdict.overall_assessment}")
+
+        if self.threat_model:
+            print(f"\nThreat Model: {self.threat_model.overall_risk_level.upper()} "
+                  f"({self.threat_model.total_threats} threats)")
+            print(f"  Classification: {self.threat_model.data_classification}")
 
         print(f"{'='*60}\n")

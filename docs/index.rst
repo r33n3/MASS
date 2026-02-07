@@ -1,9 +1,9 @@
 MASS Documentation
 ==================
 
-**Model Analysis Security & Safety**
+**Model & Application Security Suite**
 
-MASS is an API-first, cloud-native platform for comprehensive AI deployment security analysis.
+MASS is an API-first, cloud-native security platform for end-to-end AI deployment validation.
 
 .. toctree::
    :maxdepth: 2

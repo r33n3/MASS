@@ -1,6 +1,6 @@
-"""MASS - Model Analysis Security & Safety.
+"""MASS - Model & Application Security Suite.
 
-Comprehensive AI deployment security analysis platform.
+Comprehensive AI deployment security platform.
 """
 
 from mass.version import __version__

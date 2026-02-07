@@ -154,5 +154,97 @@ class FindingRepository(BaseRepository[Finding]):
         """
         return await self.update(finding, status="accepted")
 
+    async def mark_fixed(
+        self,
+        finding: Finding,
+        closed_by_scan_id: str | None = None,
+    ) -> Finding:
+        """Mark finding as fixed.
+
+        Args:
+            finding: Finding to mark.
+            closed_by_scan_id: Scan that caused the closure.
+
+        Returns:
+            Updated finding.
+        """
+        update_kwargs: dict = {"status": "fixed"}
+        if closed_by_scan_id:
+            update_kwargs["closed_by_scan_id"] = closed_by_scan_id
+        return await self.update(finding, **update_kwargs)
+
+    async def list_open_by_deployment(
+        self,
+        deployment_id: str,
+        *,
+        offset: int = 0,
+        limit: int = 100,
+        severity: str | None = None,
+    ) -> Sequence[Finding]:
+        """List findings from the latest completed scan for a deployment.
+
+        Args:
+            deployment_id: Deployment ID.
+            offset: Pagination offset.
+            limit: Pagination limit.
+            severity: Optional severity filter.
+
+        Returns:
+            List of findings.
+        """
+        from mass.storage.models.deployment import Scan
+
+        latest_scan_stmt = (
+            select(Scan.id)
+            .where(Scan.deployment_id == deployment_id)
+            .where(Scan.status == "completed")
+            .order_by(Scan.completed_at.desc())
+            .limit(1)
+        )
+        latest_result = await self.session.execute(latest_scan_stmt)
+        latest_scan_id = latest_result.scalar_one_or_none()
+
+        if not latest_scan_id:
+            return []
+
+        stmt = select(Finding).where(Finding.scan_id == latest_scan_id)
+        if severity:
+            stmt = stmt.where(Finding.severity == severity)
+        stmt = stmt.order_by(Finding.severity, Finding.created_at.desc())
+        stmt = stmt.offset(offset).limit(limit)
+
+        result = await self.session.execute(stmt)
+        return result.scalars().all()
+
+    async def list_by_fingerprint(
+        self,
+        fingerprint: str,
+        *,
+        deployment_id: str | None = None,
+        limit: int = 20,
+    ) -> Sequence[Finding]:
+        """Get all findings with a given fingerprint (finding history).
+
+        Args:
+            fingerprint: Finding fingerprint hash.
+            deployment_id: Optional deployment filter.
+            limit: Max results.
+
+        Returns:
+            Findings matching the fingerprint, ordered newest first.
+        """
+        from mass.storage.models.deployment import Scan
+
+        stmt = select(Finding).where(Finding.fingerprint == fingerprint)
+        if deployment_id:
+            stmt = (
+                stmt.join(Scan, Finding.scan_id == Scan.id)
+                .where(Scan.deployment_id == deployment_id)
+            )
+        stmt = stmt.order_by(Finding.created_at.desc()).limit(limit)
+
+        result = await self.session.execute(stmt)
+        return result.scalars().all()
+
 
 # EvidenceRepository removed - Evidence model doesn't exist in current schema

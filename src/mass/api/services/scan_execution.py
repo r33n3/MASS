@@ -70,6 +70,17 @@ class ScanExecutionService:
                 scan.started_at = datetime.utcnow()
                 await session.commit()
 
+                # Publish SCAN_STARTED event
+                try:
+                    from mass.core.events import get_event_bus, Event, EventType
+                    await get_event_bus().publish(Event(
+                        type=EventType.SCAN_STARTED,
+                        data={"scan_id": scan_id, "deployment_id": scan.deployment_id},
+                        tenant_id=tenant_id,
+                    ))
+                except Exception:
+                    logger.debug("Failed to publish SCAN_STARTED event", exc_info=True)
+
                 # Load deployment to get source_path and target configuration
                 deployment = await deployment_repo.get(scan.deployment_id)
                 if not deployment:
@@ -178,7 +189,156 @@ class ScanExecutionService:
                     scan.medium_findings = summary.medium_count if summary else 0
                     scan.low_findings = summary.low_count if summary else 0
 
-                    await session.flush()
+                    await session.commit()
+
+                # Run Final Verdict Judge — holistic post-scan analysis
+                try:
+                    scan.current_phase = "generating_verdict"
+                    await session.commit()
+
+                    from mass.orchestration.judge import FinalJudge
+
+                    judge = FinalJudge(
+                        provider=deploy_meta.get("model_provider", "ollama"),
+                        model=deploy_meta.get("model_name"),
+                    )
+
+                    # Serialize findings for the evidence brief
+                    serialized_findings = []
+                    for f in scan_result.findings:
+                        serialized_findings.append(f.model_dump(
+                            include={
+                                "title", "description", "severity", "category",
+                                "component_type", "component_name", "confidence",
+                                "metadata", "cwe_ids", "owasp_ids",
+                            }
+                        ))
+
+                    # Build progressive threat model (Phases 1-3)
+                    tm_builder = None
+                    try:
+                        from mass.threat_model.builder import ThreatModelBuilder
+                        from mass.orchestration.judge import _infer_deployment_posture
+
+                        tm_builder = ThreatModelBuilder(deployment.name)
+
+                        # Phase 1: Discovery
+                        posture = _infer_deployment_posture(
+                            scan_result.metadata.get("environment", {}),
+                            scan_result.metadata.get("topology", {}),
+                            deploy_meta,
+                            serialized_findings,
+                        )
+                        tm_builder.ingest_discovery(
+                            environment=scan_result.metadata.get("environment", {}),
+                            topology=scan_result.metadata.get("topology", {}),
+                            attack_surface=None,
+                            deployment_posture=posture,
+                        )
+
+                        # Phase 2: Static findings
+                        tm_builder.ingest_findings(serialized_findings)
+
+                        # Phase 3: Interrogation (confirmed findings + risk score)
+                        if scan_result.metadata.get("risk_score"):
+                            confirmed = [
+                                f for f in serialized_findings
+                                if f.get("metadata", {}).get("confidence_level") == "confirmed"
+                            ]
+                            tm_builder.ingest_interrogation(
+                                risk_score=scan_result.metadata.get("risk_score"),
+                                findings=confirmed,
+                            )
+                    except Exception:
+                        logger.debug("Threat model construction failed (non-fatal)", exc_info=True)
+                        tm_builder = None
+
+                    brief = judge.assemble_evidence(
+                        scan_id=scan_id,
+                        deployment_name=deployment.name,
+                        profile=profile_name,
+                        duration_seconds=scan.duration_seconds or 0,
+                        findings=serialized_findings,
+                        risk_score=scan_result.metadata.get("risk_score"),
+                        target_info={
+                            "target_type": target_type,
+                            "model_provider": deploy_meta.get("model_provider"),
+                            "model_name": deploy_meta.get("model_name"),
+                            "model_endpoint": deploy_meta.get("model_endpoint"),
+                            "agent_url": deploy_meta.get("agent_url"),
+                        },
+                        environment=scan_result.metadata.get("environment"),
+                        topology=scan_result.metadata.get("topology"),
+                    )
+
+                    verdict = await loop.run_in_executor(
+                        _scan_thread_pool,
+                        lambda: judge.judge(brief),
+                    )
+
+                    scan.verdict = verdict.to_json()
+                    scan.current_phase = "completed"
+                    await session.commit()
+
+                    logger.info(
+                        "Scan %s verdict: %s (risk_level=%s, confidence=%.2f)",
+                        scan_id,
+                        verdict.overall_assessment[:80],
+                        verdict.risk_level,
+                        verdict.confidence,
+                    )
+
+                    # Broadcast verdict via WebSocket
+                    try:
+                        from mass.dashboard.websocket import broadcast_verdict_ready
+                        await broadcast_verdict_ready(
+                            scan_id=scan_id,
+                            risk_level=verdict.risk_level,
+                            overall_assessment=verdict.overall_assessment,
+                        )
+                    except Exception:
+                        logger.debug("Failed to broadcast verdict", exc_info=True)
+
+                except Exception:
+                    logger.warning(
+                        "Scan %s: verdict generation failed (non-fatal)",
+                        scan_id,
+                        exc_info=True,
+                    )
+
+                # Phase 4: Integrate verdict into threat model and finalize
+                if tm_builder is not None:
+                    try:
+                        if scan.verdict:
+                            verdict_data = json.loads(scan.verdict)
+                            tm_builder.ingest_verdict(verdict_data)
+                        threat_model_obj = tm_builder.build()
+                        scan.threat_model = json.dumps(threat_model_obj.to_dict())
+                        await session.commit()
+                        logger.info(
+                            "Scan %s threat model: %s (%d threats, data_class=%s)",
+                            scan_id,
+                            threat_model_obj.overall_risk_level,
+                            len(threat_model_obj.threats),
+                            threat_model_obj.data_classification.value,
+                        )
+                        # Broadcast threat model via WebSocket
+                        try:
+                            from mass.dashboard.websocket import broadcast_threat_model_ready
+                            await broadcast_threat_model_ready(
+                                scan_id=scan_id,
+                                overall_risk_level=threat_model_obj.overall_risk_level,
+                                total_threats=len(threat_model_obj.threats),
+                                data_classification=threat_model_obj.data_classification.value,
+                            )
+                        except Exception:
+                            logger.debug("Failed to broadcast threat model", exc_info=True)
+
+                    except Exception:
+                        logger.debug(
+                            "Threat model finalization failed (non-fatal)",
+                            exc_info=True,
+                        )
 
                 # Persist discovered environment + topology to deployment metadata
                 # so the dashboard and API can serve topology without re-scanning.
@@ -208,6 +368,22 @@ class ScanExecutionService:
                     except Exception:
                         logger.debug("Failed to persist topology to deployment", exc_info=True)
 
+                # Auto-close findings from previous scan that no longer appear
+                try:
+                    from mass.api.services.finding_lifecycle import auto_close_findings
+                    closed_count = await auto_close_findings(
+                        session=session,
+                        completed_scan_id=scan_id,
+                        deployment_id=scan.deployment_id,
+                    )
+                    if closed_count > 0:
+                        logger.info(
+                            "Auto-closed %d findings for deployment %s",
+                            closed_count, scan.deployment_id,
+                        )
+                except Exception:
+                    logger.debug("Auto-close findings failed (non-fatal)", exc_info=True)
+
                 logger.info(
                     f"Scan {scan_id} completed: {len(scan_result.findings)} findings "
                     f"in {scan.duration_seconds if scan else '?'}s"
@@ -225,6 +401,22 @@ class ScanExecutionService:
                 except Exception:
                     logger.debug("Failed to broadcast scan completion", exc_info=True)
 
+                # Publish SCAN_COMPLETED event
+                try:
+                    from mass.core.events import get_event_bus, Event, EventType
+                    await get_event_bus().publish(Event(
+                        type=EventType.SCAN_COMPLETED,
+                        data={
+                            "scan_id": scan_id,
+                            "deployment_id": scan.deployment_id,
+                            "findings_count": len(scan_result.findings),
+                            "duration_seconds": scan.duration_seconds,
+                        },
+                        tenant_id=tenant_id,
+                    ))
+                except Exception:
+                    logger.debug("Failed to publish SCAN_COMPLETED event", exc_info=True)
+
             except Exception as e:
                 logger.exception(f"Scan {scan_id} failed: {e}")
                 try:
@@ -238,7 +430,7 @@ class ScanExecutionService:
                             scan.duration_seconds = int(
                                 (scan.completed_at - scan.started_at).total_seconds()
                             )
-                        await session.flush()
+                        await session.commit()
 
                     # Broadcast failure via WebSocket
                     try:
@@ -251,6 +443,17 @@ class ScanExecutionService:
                         )
                     except Exception:
                         logger.debug("Failed to broadcast scan failure", exc_info=True)
+
+                    # Publish SCAN_FAILED event
+                    try:
+                        from mass.core.events import get_event_bus, Event, EventType
+                        await get_event_bus().publish(Event(
+                            type=EventType.SCAN_FAILED,
+                            data={"scan_id": scan_id, "error": str(e)},
+                            tenant_id=tenant_id,
+                        ))
+                    except Exception:
+                        logger.debug("Failed to publish SCAN_FAILED event", exc_info=True)
 
                 except Exception as update_error:
                     logger.exception(f"Failed to update scan status: {update_error}")

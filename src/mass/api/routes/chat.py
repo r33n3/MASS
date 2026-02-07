@@ -1,0 +1,526 @@
+"""Chat endpoints.
+
+Provides a conversational AI assistant for the dashboard.
+Routes chat messages to configurable LLM providers:
+Ollama (default), OpenAI, Anthropic, Gemini, Grok.
+
+The chat maintains conversation context via client-supplied history
+and adds a MASS-specific system prompt for security expertise.
+"""
+
+import logging
+import os
+import time
+from typing import Any
+
+import httpx
+from fastapi import APIRouter, HTTPException, status
+from pydantic import BaseModel, ConfigDict, Field
+
+from mass.api.dependencies import CurrentTenantDep, DBSession
+from mass.api.services.chat_context import gather_chat_context
+from mass.api.services.docs_loader import get_docs_for_chat
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter()
+
+# Default system prompt for the MASS security assistant
+MASS_SYSTEM_PROMPT = (
+    "You are MASS (Model & Application Security Suite), an expert AI security assistant "
+    "built into a comprehensive AI deployment security platform.\n\n"
+    "PLATFORM CAPABILITIES:\n"
+    "- Discovery: Scans directories and GitHub repos to inventory AI components "
+    "(models, MCP servers, agent frameworks, infrastructure configs)\n"
+    "- Static Analysis: 8 concurrent analyzers covering secrets detection, prompt injection patterns, "
+    "MCP server config risks, workflow/agent architecture, model file supply chain, "
+    "infrastructure (Docker/K8s/Terraform), attack surface mapping, and context/persona analysis\n"
+    "- Dynamic Interrogation: 25+ adversarial probes (jailbreak, injection, leakage, harmful output) "
+    "against live model endpoints via OpenAI, Ollama, Anthropic, Bedrock, HuggingFace runners\n"
+    "- MCP Server Testing: Active interrogation of MCP tool servers with command injection, "
+    "path traversal, SSRF, SQLi, and prompt injection payloads\n"
+    "- Compliance Mapping: OWASP LLM Top 10, MITRE ATLAS, NIST AI RMF, EU AI Act\n"
+    "- Remediation: Code examples, guardrail templates, and cloud-specific guidance per finding\n"
+    "- Reporting: SARIF, HTML, JSON, PDF export\n"
+    "- Scan Profiles: quick (secrets + basic), standard (full static), comprehensive (static + dynamic)\n\n"
+    "FINDING SEVERITIES: critical, high, medium, low, info\n"
+    "FINDING STATUSES: open, confirmed, false_positive, accepted, fixed\n\n"
+    "When answering, be concise, technical, and actionable. Reference specific severity levels, "
+    "categories, and compliance frameworks. Provide remediation guidance when discussing findings. "
+    "If real-time environment context is provided below, cite specific numbers, names, and statuses."
+)
+
+
+# ---- Schemas ----
+
+class ChatMessage(BaseModel):
+    """A single chat message."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    role: str = Field(description="Message role: user, assistant, or system")
+    content: str = Field(description="Message content")
+
+
+class ChatRequest(BaseModel):
+    """Request to send a chat message."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    message: str = Field(..., min_length=1, description="The user message")
+    history: list[ChatMessage] = Field(
+        default_factory=list,
+        description="Previous conversation messages for context",
+    )
+    provider: str = Field(
+        default="ollama",
+        description="LLM provider: ollama, openai, anthropic, gemini, grok",
+    )
+    model: str | None = Field(
+        default=None,
+        description="Model name (e.g., llama3.2:1b, gpt-4o, claude-sonnet-4-5-20250929). Defaults per provider.",
+    )
+    endpoint: str | None = Field(
+        default=None,
+        description="Custom API endpoint URL. Uses env defaults if not set.",
+    )
+    api_key: str | None = Field(
+        default=None,
+        description="Provider API key. Uses env defaults if not set.",
+    )
+    system_prompt: str | None = Field(
+        default=None,
+        description="Custom system prompt. Uses MASS default if not set.",
+    )
+    temperature: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=2.0,
+        description="Sampling temperature",
+    )
+
+
+class ChatResponse(BaseModel):
+    """Response from the chat endpoint."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    response: str = Field(description="The assistant's reply")
+    provider: str = Field(description="Provider that generated the response")
+    model: str = Field(description="Model that generated the response")
+    latency_ms: float = Field(default=0.0, description="Response latency in ms")
+    tokens_used: int = Field(default=0, description="Approximate tokens used")
+
+
+class ChatProvidersResponse(BaseModel):
+    """Available chat providers and their configuration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    providers: list[dict[str, Any]] = Field(description="Available providers")
+
+
+# ---- Provider defaults ----
+
+_PROVIDER_DEFAULTS: dict[str, dict[str, str]] = {
+    "ollama": {
+        "model": "qwen3:8b",
+        "endpoint_env": "OLLAMA_ATTACKER_HOST",
+        "endpoint_fallback": "http://ollama-attacker:11434",
+    },
+    "openai": {
+        "model": "gpt-4o",
+        "endpoint_env": "OPENAI_API_BASE",
+        "endpoint_fallback": "https://api.openai.com/v1",
+        "key_env": "OPENAI_API_KEY",
+    },
+    "anthropic": {
+        "model": "claude-sonnet-4-5-20250929",
+        "endpoint_env": "ANTHROPIC_API_BASE",
+        "endpoint_fallback": "https://api.anthropic.com",
+        "key_env": "ANTHROPIC_API_KEY",
+    },
+    "gemini": {
+        "model": "gemini-2.0-flash",
+        "endpoint_env": "GEMINI_API_BASE",
+        "endpoint_fallback": "https://generativelanguage.googleapis.com/v1beta",
+        "key_env": "GEMINI_API_KEY",
+    },
+    "grok": {
+        "model": "grok-3",
+        "endpoint_env": "GROK_API_BASE",
+        "endpoint_fallback": "https://api.x.ai/v1",
+        "key_env": "XAI_API_KEY",
+    },
+}
+
+
+# ---- Provider dispatchers ----
+
+async def _chat_ollama(
+    messages: list[dict[str, str]],
+    model: str,
+    endpoint: str,
+    temperature: float,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Send chat to Ollama."""
+    url = f"{endpoint.rstrip('/')}/api/chat"
+    payload = {
+        "model": model,
+        "messages": messages,
+        "stream": False,
+        "options": {"temperature": temperature},
+    }
+
+    async with httpx.AsyncClient(timeout=300.0) as client:
+        resp = await client.post(url, json=payload)
+        resp.raise_for_status()
+        data = resp.json()
+
+    content = data.get("message", {}).get("content", "")
+    tokens = data.get("prompt_eval_count", 0) + data.get("eval_count", 0)
+
+    return {"content": content, "tokens": tokens}
+
+
+async def _chat_openai_compatible(
+    messages: list[dict[str, str]],
+    model: str,
+    endpoint: str,
+    api_key: str,
+    temperature: float,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Send chat via OpenAI-compatible API (OpenAI, Grok, etc.)."""
+    url = f"{endpoint.rstrip('/')}/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+    }
+
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        resp = await client.post(url, json=payload, headers=headers)
+        resp.raise_for_status()
+        data = resp.json()
+
+    choice = data.get("choices", [{}])[0]
+    content = choice.get("message", {}).get("content", "")
+    usage = data.get("usage", {})
+    tokens = usage.get("total_tokens", 0)
+
+    return {"content": content, "tokens": tokens}
+
+
+async def _chat_anthropic(
+    messages: list[dict[str, str]],
+    model: str,
+    endpoint: str,
+    api_key: str,
+    temperature: float,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Send chat via Anthropic Messages API."""
+    url = f"{endpoint.rstrip('/')}/v1/messages"
+    headers = {
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01",
+        "Content-Type": "application/json",
+    }
+
+    # Anthropic requires system prompt separately
+    system_text = ""
+    api_messages = []
+    for msg in messages:
+        if msg["role"] == "system":
+            system_text += msg["content"] + "\n"
+        else:
+            api_messages.append({"role": msg["role"], "content": msg["content"]})
+
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": api_messages,
+        "max_tokens": 4096,
+        "temperature": temperature,
+    }
+    if system_text.strip():
+        payload["system"] = system_text.strip()
+
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        resp = await client.post(url, json=payload, headers=headers)
+        resp.raise_for_status()
+        data = resp.json()
+
+    content_blocks = data.get("content", [])
+    content = "".join(b.get("text", "") for b in content_blocks if b.get("type") == "text")
+    usage = data.get("usage", {})
+    tokens = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+
+    return {"content": content, "tokens": tokens}
+
+
+async def _chat_gemini(
+    messages: list[dict[str, str]],
+    model: str,
+    endpoint: str,
+    api_key: str,
+    temperature: float,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Send chat via Google Gemini API."""
+    url = f"{endpoint.rstrip('/')}/models/{model}:generateContent?key={api_key}"
+
+    # Convert messages to Gemini format
+    system_text = ""
+    contents = []
+    for msg in messages:
+        if msg["role"] == "system":
+            system_text += msg["content"] + "\n"
+        else:
+            role = "user" if msg["role"] == "user" else "model"
+            contents.append({"role": role, "parts": [{"text": msg["content"]}]})
+
+    payload: dict[str, Any] = {
+        "contents": contents,
+        "generationConfig": {"temperature": temperature},
+    }
+    if system_text.strip():
+        payload["systemInstruction"] = {"parts": [{"text": system_text.strip()}]}
+
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        resp = await client.post(url, json=payload)
+        resp.raise_for_status()
+        data = resp.json()
+
+    candidates = data.get("candidates", [])
+    content = ""
+    if candidates:
+        parts = candidates[0].get("content", {}).get("parts", [])
+        content = "".join(p.get("text", "") for p in parts)
+
+    usage = data.get("usageMetadata", {})
+    tokens = usage.get("totalTokenCount", 0)
+
+    return {"content": content, "tokens": tokens}
+
+
+# Provider dispatch table
+_PROVIDERS = {
+    "ollama": _chat_ollama,
+    "openai": _chat_openai_compatible,
+    "anthropic": _chat_anthropic,
+    "gemini": _chat_gemini,
+    "grok": _chat_openai_compatible,  # Grok uses OpenAI-compatible API
+}
+
+
+# ---- Endpoints ----
+
+@router.post(
+    "",
+    response_model=ChatResponse,
+    summary="Send a chat message",
+    description=(
+        "Sends a message to the configured LLM provider and returns the response. "
+        "Supports Ollama (default), OpenAI, Anthropic, Gemini, and Grok. "
+        "Conversation history is maintained client-side and passed with each request."
+    ),
+)
+async def chat(
+    request: ChatRequest,
+    tenant: CurrentTenantDep,
+    db: DBSession,
+) -> ChatResponse:
+    """Process a chat message through the configured LLM provider."""
+    provider = request.provider.lower()
+
+    if provider not in _PROVIDERS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported provider: {provider}. "
+                   f"Supported: {', '.join(_PROVIDERS.keys())}",
+        )
+
+    # Resolve configuration
+    defaults = _PROVIDER_DEFAULTS.get(provider, {})
+    model = request.model or defaults.get("model", "")
+    endpoint = (
+        request.endpoint
+        or os.getenv(defaults.get("endpoint_env", ""), "")
+        or defaults.get("endpoint_fallback", "")
+    )
+    api_key = (
+        request.api_key
+        or os.getenv(defaults.get("key_env", ""), "")
+    )
+    system_prompt = request.system_prompt or MASS_SYSTEM_PROMPT
+
+    # Gather database context (deployments, scans, findings)
+    try:
+        db_context = await gather_chat_context(db, tenant.tenant_id, request.message)
+    except Exception as exc:
+        logger.warning("Failed to gather DB context: %s", exc)
+        db_context = ""
+
+    # Gather documentation context
+    try:
+        docs_context = get_docs_for_chat(request.message)
+    except Exception as exc:
+        logger.warning("Failed to gather docs context: %s", exc)
+        docs_context = ""
+
+    # Combine system prompt with gathered context
+    full_system_prompt = system_prompt + db_context + docs_context
+
+    # Build messages list
+    messages: list[dict[str, str]] = [{"role": "system", "content": full_system_prompt}]
+    for msg in request.history:
+        messages.append({"role": msg.role, "content": msg.content})
+    messages.append({"role": "user", "content": request.message})
+
+    # Ensure Ollama model is ready if using Ollama provider
+    if provider == "ollama":
+        try:
+            from mass.api.services.ollama_manager import ensure_model_ready
+
+            ok, setup_msg = await ensure_model_ready(endpoint, model)
+            if not ok:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=f"Ollama model setup failed: {setup_msg}",
+                )
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.warning("Ollama model readiness check failed: %s", e)
+            # Continue anyway — the model may already be loaded
+
+    # Dispatch to provider
+    handler = _PROVIDERS[provider]
+    start = time.time()
+
+    try:
+        if provider == "ollama":
+            result = await handler(
+                messages=messages,
+                model=model,
+                endpoint=endpoint,
+                temperature=request.temperature,
+            )
+        else:
+            if not api_key and provider != "ollama":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"API key required for provider '{provider}'. "
+                           f"Set via request body or {defaults.get('key_env', 'env var')} env var.",
+                )
+            result = await handler(
+                messages=messages,
+                model=model,
+                endpoint=endpoint,
+                api_key=api_key,
+                temperature=request.temperature,
+            )
+    except httpx.ConnectError:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Cannot connect to {provider} at {endpoint}. Is the service running?",
+        )
+    except (httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout):
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail=f"Request to {provider} ({model}) timed out. The model may be loading or the response is too long. Try again.",
+        )
+    except httpx.HTTPStatusError as e:
+        detail = e.response.text[:500] if e.response else str(e)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"{provider} returned error {e.response.status_code}: {detail}",
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Chat error with provider %s", provider)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Chat error: {str(e)}",
+        )
+
+    latency_ms = (time.time() - start) * 1000
+
+    return ChatResponse(
+        response=result.get("content", ""),
+        provider=provider,
+        model=model,
+        latency_ms=round(latency_ms, 1),
+        tokens_used=result.get("tokens", 0),
+    )
+
+
+@router.get(
+    "/providers",
+    response_model=ChatProvidersResponse,
+    summary="List available chat providers",
+    description="Returns configured chat providers with their default models and availability.",
+)
+async def list_providers(tenant: CurrentTenantDep) -> ChatProvidersResponse:
+    """List available chat providers and their status."""
+    providers = []
+
+    for name, defaults in _PROVIDER_DEFAULTS.items():
+        endpoint = os.getenv(defaults.get("endpoint_env", ""), "") or defaults.get("endpoint_fallback", "")
+        has_key = bool(os.getenv(defaults.get("key_env", ""), "")) if "key_env" in defaults else True
+        available = bool(endpoint) and (has_key or name == "ollama")
+
+        providers.append({
+            "name": name,
+            "default_model": defaults.get("model", ""),
+            "endpoint": endpoint,
+            "available": available,
+            "requires_api_key": "key_env" in defaults,
+        })
+
+    return ChatProvidersResponse(providers=providers)
+
+
+@router.get(
+    "/models",
+    summary="List available models for a provider",
+    description="For Ollama, fetches available models. For others, returns default model.",
+)
+async def list_chat_models(
+    tenant: CurrentTenantDep,
+    provider: str = "ollama",
+) -> dict[str, Any]:
+    """List models available for a chat provider."""
+    if provider == "ollama":
+        endpoint = os.getenv("OLLAMA_ATTACKER_HOST", "") or os.getenv("OLLAMA_HOST", "http://ollama-attacker:11434")
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(f"{endpoint.rstrip('/')}/api/tags")
+                resp.raise_for_status()
+                data = resp.json()
+
+            models = [
+                {
+                    "name": m.get("name", ""),
+                    "size": f"{m.get('size', 0) / (1024**3):.1f} GB",
+                }
+                for m in data.get("models", [])
+            ]
+            return {"provider": "ollama", "models": models}
+        except Exception as e:
+            logger.warning("Failed to list Ollama models: %s", e)
+            return {"provider": "ollama", "models": [], "error": str(e)}
+
+    # For non-Ollama providers, return the default model
+    defaults = _PROVIDER_DEFAULTS.get(provider, {})
+    return {
+        "provider": provider,
+        "models": [{"name": defaults.get("model", "unknown")}],
+    }

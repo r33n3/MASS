@@ -5,6 +5,10 @@ Generates security-focused test cases based on tool parameter types:
 - Path traversal for file/path params
 - SSRF for URL params
 - SQL injection for query params
+- Boundary/fuzzing (null, empty, oversized, type confusion)
+- Data exfiltration (credential/key file discovery)
+- Privilege escalation (role elevation, UID manipulation)
+- Information disclosure (error triggering, version leakage)
 """
 
 import logging
@@ -30,6 +34,10 @@ class AttackCategory(str, Enum):
     LDAP_INJECTION = "ldap_injection"
     PROMPT_INJECTION = "prompt_injection"
     DENIAL_OF_SERVICE = "denial_of_service"
+    BOUNDARY = "boundary"
+    EXFILTRATION = "exfiltration"
+    PRIVILEGE_ESCALATION = "privilege_escalation"
+    INFORMATION_DISCLOSURE = "information_disclosure"
 
 
 @dataclass
@@ -189,6 +197,75 @@ TEMPLATE_INJECTION_PAYLOADS = [
     ("{if system('id')}{/if}", "Smarty condition"),
 ]
 
+# Boundary / fuzzing tests — stress input validation
+BOUNDARY_PAYLOADS: list[tuple[Any, str]] = [
+    (None, "Null input"),
+    ("", "Empty string"),
+    ("A" * 10_000, "Oversized string (10KB)"),
+    ("A" * 100_000, "Oversized string (100KB)"),
+    ("\x00\x01\x02\x03\x04\x05", "Control characters"),
+    ("\r\n\r\n\r\n", "CRLF sequence"),
+    ("\t" * 1000, "Tab flood"),
+    (2_147_483_647, "Max 32-bit integer"),
+    (-2_147_483_648, "Min 32-bit integer"),
+    (9_999_999_999_999_999, "Integer overflow 64-bit"),
+    (0, "Zero integer"),
+    ({"a": {"b": {"c": {"d": {"e": "deep"}}}}}, "Deeply nested object"),
+    ([None, True, 0, "", [], {}], "Mixed-type array"),
+    ({"__proto__": {"admin": True}}, "Prototype pollution"),
+    (float("inf"), "Infinity float"),
+    (float("nan"), "NaN float"),
+]
+
+# Data exfiltration tests — attempts to read sensitive files
+EXFILTRATION_PAYLOADS = [
+    ("*", "Wildcard enumeration"),
+    ("*.env", "Env file discovery"),
+    (".env", "Dotenv file access"),
+    (".env.local", "Local dotenv access"),
+    ("*.pem", "Private key discovery"),
+    ("*.key", "Key file discovery"),
+    ("~/.ssh/id_rsa", "SSH private key"),
+    ("~/.ssh/id_ed25519", "SSH ED25519 key"),
+    ("~/.ssh/authorized_keys", "SSH authorized keys"),
+    ("~/.aws/credentials", "AWS credentials"),
+    ("~/.config/gcloud/credentials.db", "GCloud credentials"),
+    ("/proc/self/environ", "Process environment vars"),
+    ("/proc/self/cmdline", "Process command line"),
+    ("C:\\Users\\*\\AppData\\Local\\Google\\Chrome\\User Data\\Default\\Login Data", "Chrome passwords"),
+]
+
+# Privilege escalation tests
+PRIVILEGE_ESCALATION_PAYLOADS: list[tuple[Any, str]] = [
+    ("admin", "Role elevation: admin string"),
+    ({"role": "admin"}, "Role field injection"),
+    ({"is_admin": True}, "Admin flag injection"),
+    ({"uid": 0}, "UID 0 (root)"),
+    ({"permissions": ["*"]}, "Wildcard permissions"),
+    ("sudo su", "Sudo escalation command"),
+    ("runas /user:Administrator cmd", "Windows runas"),
+    ({"access_level": "superuser"}, "Superuser access level"),
+    ({"user_id": 1}, "User ID 1 (first admin)"),
+    ("grant all privileges", "SQL privilege grant"),
+    ({"scope": "admin:*"}, "OAuth admin scope"),
+]
+
+# Information disclosure tests — trigger verbose errors / version info
+INFORMATION_DISCLOSURE_PAYLOADS = [
+    ("'", "Single quote error trigger"),
+    ("\\", "Backslash error trigger"),
+    ("\x00", "Null byte error trigger"),
+    ("SHOW TABLES", "SQL schema discovery"),
+    ("SELECT version()", "Database version"),
+    ("phpinfo()", "PHP info"),
+    ("{{debug}}", "Template debug mode"),
+    ("${{<%[%'\"}}%\\.", "Polyglot error trigger"),
+    ("__version__", "Version attribute access"),
+    ("?debug=1", "Debug query parameter"),
+    ("TRACE / HTTP/1.1", "HTTP TRACE method"),
+    ({"$lookup": {"from": "admin"}}, "MongoDB lookup"),
+]
+
 
 class MCPToolTester:
     """Generates and runs adversarial tests against MCP tools."""
@@ -260,7 +337,7 @@ class MCPToolTester:
         param: ToolParameter,
     ) -> list[AttackCategory]:
         """Infer which attack categories apply to a parameter."""
-        categories = []
+        categories: list[AttackCategory] = []
 
         # Based on inferred type
         if param.is_command:
@@ -268,7 +345,8 @@ class MCPToolTester:
 
         if param.is_path:
             categories.append(AttackCategory.PATH_TRAVERSAL)
-            categories.append(AttackCategory.COMMAND_INJECTION)  # Path can be injected too
+            categories.append(AttackCategory.COMMAND_INJECTION)
+            categories.append(AttackCategory.EXFILTRATION)
 
         if param.is_url:
             categories.append(AttackCategory.SSRF)
@@ -284,24 +362,36 @@ class MCPToolTester:
                 AttackCategory.TEMPLATE_INJECTION,
             ])
 
-        # All string params get prompt injection tests
+        # All string params get prompt injection + info disclosure tests
         if param.type == "string":
             categories.append(AttackCategory.PROMPT_INJECTION)
+            categories.append(AttackCategory.INFORMATION_DISCLOSURE)
+
+        # All params get boundary tests (type-agnostic fuzzing)
+        categories.append(AttackCategory.BOUNDARY)
+
+        # Object/dict params get privilege escalation tests
+        if param.type in ("object", "string"):
+            categories.append(AttackCategory.PRIVILEGE_ESCALATION)
 
         return list(set(categories))
 
     def _get_payloads(
         self,
         category: AttackCategory,
-    ) -> list[tuple[str, str]]:
+    ) -> list[tuple[Any, str]]:
         """Get attack payloads for a category."""
-        payload_map = {
+        payload_map: dict[AttackCategory, list[tuple[Any, str]]] = {
             AttackCategory.COMMAND_INJECTION: COMMAND_INJECTION_PAYLOADS,
             AttackCategory.PATH_TRAVERSAL: PATH_TRAVERSAL_PAYLOADS,
             AttackCategory.SSRF: SSRF_PAYLOADS,
             AttackCategory.SQL_INJECTION: SQL_INJECTION_PAYLOADS,
             AttackCategory.PROMPT_INJECTION: PROMPT_INJECTION_PAYLOADS,
             AttackCategory.TEMPLATE_INJECTION: TEMPLATE_INJECTION_PAYLOADS,
+            AttackCategory.BOUNDARY: BOUNDARY_PAYLOADS,
+            AttackCategory.EXFILTRATION: EXFILTRATION_PAYLOADS,
+            AttackCategory.PRIVILEGE_ESCALATION: PRIVILEGE_ESCALATION_PAYLOADS,
+            AttackCategory.INFORMATION_DISCLOSURE: INFORMATION_DISCLOSURE_PAYLOADS,
         }
         return payload_map.get(category, [])
 
@@ -311,15 +401,21 @@ class MCPToolTester:
             AttackCategory.COMMAND_INJECTION,
             AttackCategory.SQL_INJECTION,
             AttackCategory.SSRF,
+            AttackCategory.EXFILTRATION,
         }
         high = {
             AttackCategory.PATH_TRAVERSAL,
             AttackCategory.TEMPLATE_INJECTION,
             AttackCategory.LDAP_INJECTION,
+            AttackCategory.PRIVILEGE_ESCALATION,
         }
         medium = {
             AttackCategory.XSS,
             AttackCategory.PROMPT_INJECTION,
+            AttackCategory.INFORMATION_DISCLOSURE,
+        }
+        low = {
+            AttackCategory.BOUNDARY,
         }
 
         if category in critical:
@@ -428,6 +524,7 @@ class MCPToolTester:
     ) -> bool:
         """Check if the payload appears to have executed."""
         result_str = str(result.result).lower() if result.result else ""
+        payload_str = str(test_case.payload) if test_case.payload is not None else ""
 
         # Category-specific execution indicators
         if test_case.attack_category == AttackCategory.COMMAND_INJECTION:
@@ -443,18 +540,58 @@ class MCPToolTester:
             return any(ind in result_str for ind in indicators)
 
         elif test_case.attack_category == AttackCategory.SQL_INJECTION:
-            # Check for error messages indicating SQL execution
             indicators = ["syntax error", "sql", "table", "column", "query"]
-            # Also check for data that shouldn't be returned
-            if "union" in test_case.payload.lower():
-                return len(result_str) > 1000  # Large response might indicate data dump
+            if "union" in payload_str.lower():
+                return len(result_str) > 1000
 
         elif test_case.attack_category == AttackCategory.TEMPLATE_INJECTION:
-            # Check for evaluated expressions
-            if "7*7" in test_case.payload:
+            if "7*7" in payload_str:
                 return "49" in result_str
-            if "__class__" in test_case.payload:
+            if "__class__" in payload_str:
                 return "class" in result_str
+
+        elif test_case.attack_category == AttackCategory.BOUNDARY:
+            # Boundary tests pass if the tool crashes or returns unexpected data
+            # A successful tool response to null/overflow = potential issue
+            if test_case.payload is None and result.success:
+                return True  # Tool accepted null when it shouldn't
+            if isinstance(test_case.payload, (int, float)):
+                # Overflow or special float accepted without error
+                if test_case.payload in (2_147_483_647, -2_147_483_648, 9_999_999_999_999_999):
+                    return False  # Not necessarily a vulnerability
+                if isinstance(test_case.payload, float) and (
+                    test_case.payload != test_case.payload  # NaN
+                    or test_case.payload == float("inf")
+                ):
+                    return result.success  # Accepting inf/nan is suspicious
+
+        elif test_case.attack_category == AttackCategory.EXFILTRATION:
+            # Check if sensitive file contents were returned
+            sensitive_indicators = [
+                "-----begin", "private key", "ssh-rsa", "ssh-ed25519",
+                "aws_access_key", "aws_secret", "root:", "passwd",
+                "credential", "api_key",
+            ]
+            return any(ind in result_str for ind in sensitive_indicators)
+
+        elif test_case.attack_category == AttackCategory.PRIVILEGE_ESCALATION:
+            # Check if elevated privileges were granted
+            priv_indicators = [
+                "admin", "superuser", "root", "elevated", "granted",
+                "privilege", "authorized",
+            ]
+            # Only flag if the response positively confirms escalation
+            confirms = sum(1 for ind in priv_indicators if ind in result_str)
+            return confirms >= 2  # Multiple indicators = likely escalation
+
+        elif test_case.attack_category == AttackCategory.INFORMATION_DISCLOSURE:
+            # Check for verbose errors, stack traces, version info
+            disclosure_indicators = [
+                "traceback", "exception", "stack trace", "at line",
+                "version", "server:", "x-powered-by", "debug",
+                "internal server error", "syntax error",
+            ]
+            return any(ind in result_str for ind in disclosure_indicators)
 
         return False
 

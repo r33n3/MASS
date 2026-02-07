@@ -4,10 +4,10 @@
 # Function to display banner
 function Show-Banner {
     Write-Host @"
-╔═══════════════════════════════════════════╗
-║   MASS - Model Analysis Security & Safety ║
-║   Local Development Environment           ║
-╚═══════════════════════════════════════════╝
+╔══════════════════════════════════════════════════╗
+║   MASS - Model & Application Security Suite      ║
+║   Local Development Environment                  ║
+╚══════════════════════════════════════════════════╝
 "@ -ForegroundColor Cyan
 }
 

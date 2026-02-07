@@ -16,6 +16,7 @@ from uuid import uuid4
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, HTTPException, status
+from pydantic import BaseModel, Field
 
 from mass.api.dependencies import CurrentTenantDep, DBSession
 from mass.api.schemas.interrogation import (
@@ -265,17 +266,21 @@ async def get_interrogation_job(
     # Check in-memory first (active/running jobs)
     active = _active_jobs.get(job_id)
     if active and active.get("status") in ("pending", "running"):
+        if active.get("tenant_id") and active["tenant_id"] != tenant.tenant_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Job {job_id} not found")
         return InterrogationResponse(
             job_id=job_id,
             status=active["status"],
             attacker_model=active["attacker_model"],
             target_model=active["target_model"],
-            message="Job is still running..." if active["status"] == "running" else "Queued",
+            message=active.get("message", "Running..."),
         )
 
-    # Load from Redis (completed/historical jobs)
+    # Load from Redis (running or completed jobs)
     stored = await _load_job_from_redis(job_id)
     if stored:
+        if stored.get("tenant_id") and stored["tenant_id"] != tenant.tenant_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Job {job_id} not found")
         return InterrogationResponse(**stored)
 
     raise HTTPException(
@@ -294,22 +299,27 @@ async def list_jobs(tenant: CurrentTenantDep) -> list[InterrogationStatusRespons
     seen_ids: set[str] = set()
     results: list[InterrogationStatusResponse] = []
 
-    # Active/running jobs from memory
+    # Active/running jobs from memory (filtered by tenant)
     for job_id, job in _active_jobs.items():
         if job.get("status") in ("pending", "running"):
+            if job.get("tenant_id") and job["tenant_id"] != tenant.tenant_id:
+                continue
             seen_ids.add(job_id)
             results.append(InterrogationStatusResponse(
                 job_id=job_id,
                 status=job["status"],
                 attacker_model=job["attacker_model"],
                 target_model=job["target_model"],
+                message=job.get("message", ""),
             ))
 
-    # Completed jobs from Redis
+    # All jobs from Redis (running or completed, filtered by tenant)
     redis_jobs = await _list_jobs_from_redis()
     for stored in redis_jobs:
         jid = stored.get("job_id", "")
         if jid and jid not in seen_ids:
+            if stored.get("tenant_id") and stored["tenant_id"] != tenant.tenant_id:
+                continue
             results.append(InterrogationStatusResponse(
                 job_id=jid,
                 status=stored.get("status", "unknown"),
@@ -321,7 +331,115 @@ async def list_jobs(tenant: CurrentTenantDep) -> list[InterrogationStatusRespons
                 message=stored.get("message", ""),
             ))
 
+    # Sort: running/pending first, then completed/failed
+    _STATUS_ORDER = {"running": 0, "pending": 1, "completed": 2, "failed": 3}
+    results.sort(key=lambda j: _STATUS_ORDER.get(j.status, 9))
+
     return results
+
+
+# ---- Ollama management endpoints ----
+
+
+class OllamaPullRequest(BaseModel):
+    """Request to pull a model on an Ollama instance."""
+
+    model: str = Field(..., description="Model name to pull (e.g. qwen3:8b)")
+    instance: str = Field(
+        default="source",
+        description="Ollama instance: 'source' (attacker) or 'destination' (target)",
+    )
+
+
+class OllamaPullResponse(BaseModel):
+    """Response from a model pull request."""
+
+    success: bool
+    message: str
+    instance: str
+    model: str
+
+
+class OllamaInstanceStatus(BaseModel):
+    """Health and model info for one Ollama instance."""
+
+    role: str
+    host: str
+    healthy: bool
+    models: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class OllamaStatusResponse(BaseModel):
+    """Combined status of all Ollama instances."""
+
+    instances: list[OllamaInstanceStatus]
+
+
+@router.get(
+    "/ollama/status",
+    response_model=OllamaStatusResponse,
+    summary="Ollama instances status",
+    description="Returns health and model list for all configured Ollama instances.",
+)
+async def ollama_status(tenant: CurrentTenantDep) -> OllamaStatusResponse:
+    """Check health and models on all Ollama instances."""
+    from mass.api.services.ollama_manager import (
+        check_health,
+        get_ollama_hosts,
+        list_models,
+    )
+
+    hosts = get_ollama_hosts()
+    instances: list[OllamaInstanceStatus] = []
+
+    for role, host in hosts.items():
+        if not host:
+            continue
+        healthy = await check_health(host)
+        models = await list_models(host) if healthy else []
+        instances.append(OllamaInstanceStatus(
+            role=role,
+            host=host,
+            healthy=healthy,
+            models=models,
+        ))
+
+    return OllamaStatusResponse(instances=instances)
+
+
+@router.post(
+    "/ollama/pull",
+    response_model=OllamaPullResponse,
+    summary="Pull a model on an Ollama instance",
+    description=(
+        "Triggers a model pull on the specified Ollama instance. "
+        "This is a blocking call and may take several minutes for large models."
+    ),
+)
+async def ollama_pull(
+    request: OllamaPullRequest,
+    tenant: CurrentTenantDep,
+) -> OllamaPullResponse:
+    """Pull a model on an Ollama instance."""
+    from mass.api.services.ollama_manager import get_ollama_hosts, pull_model
+
+    hosts = get_ollama_hosts()
+    host = hosts.get(request.instance)
+
+    if not host:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unknown Ollama instance: {request.instance}. Use 'source' or 'destination'.",
+        )
+
+    ok, message = await pull_model(host, request.model)
+
+    return OllamaPullResponse(
+        success=ok,
+        message=message,
+        instance=request.instance,
+        model=request.model,
+    )
 
 
 async def _execute_interrogation(job_id: str) -> None:
@@ -331,20 +449,55 @@ async def _execute_interrogation(job_id: str) -> None:
         return
 
     job["status"] = "running"
+    job["message"] = "Starting..."
 
-    # Update Redis with running status
-    await _save_job_to_redis(job_id, {
-        "job_id": job_id,
-        "status": "running",
-        "attacker_model": job["attacker_model"],
-        "target_model": job["target_model"],
-        "message": "Running...",
-    })
+    # Helper to update both in-memory and Redis status
+    async def _update_status(message: str) -> None:
+        job["message"] = message
+        await _save_job_to_redis(job_id, {
+            "job_id": job_id,
+            "status": "running",
+            "attacker_model": job["attacker_model"],
+            "target_model": job["target_model"],
+            "message": message,
+        })
+
+    await _update_status("Starting...")
 
     try:
         from mass.interrogator.orchestrator import InterrogationOrchestrator
+        from mass.api.services.ollama_manager import (
+            ensure_model_ready,
+            get_ollama_hosts,
+        )
 
         config = job["config"]
+
+        # ---- Ollama model readiness phase ----
+        hosts = get_ollama_hosts()
+
+        # Check attacker model if using Ollama
+        if config.attacker_provider == "ollama":
+            attacker_host = config.attacker_endpoint or hosts["source"]
+            attacker_model = config.attacker_model
+            await _update_status(f"Preparing attacker model: {attacker_model}...")
+            ok, msg = await ensure_model_ready(attacker_host, attacker_model)
+            if not ok:
+                raise RuntimeError(f"Attacker model setup failed: {msg}")
+            logger.info("Attacker model ready: %s on %s", attacker_model, attacker_host)
+
+        # Check target model if using Ollama
+        if config.target_provider == "ollama":
+            target_host = config.target_endpoint or hosts["destination"]
+            target_model = config.target_model
+            await _update_status(f"Preparing target model: {target_model}...")
+            ok, msg = await ensure_model_ready(target_host, target_model)
+            if not ok:
+                raise RuntimeError(f"Target model setup failed: {msg}")
+            logger.info("Target model ready: %s on %s", target_model, target_host)
+
+        await _update_status("Running interrogation...")
+
         orchestrator = InterrogationOrchestrator(config)
 
         loop = asyncio.get_running_loop()

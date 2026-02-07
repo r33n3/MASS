@@ -4,22 +4,27 @@ Handles API key and JWT authentication.
 """
 
 import hashlib
+import logging
 from typing import Callable
 
 from fastapi import Request, Response
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from mass.core.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
     """Middleware for authentication processing.
 
-    This middleware extracts authentication information from requests
-    and adds it to the request state for use by dependencies.
+    Extracts authentication information from requests and adds it
+    to request state. In production mode, rejects unauthenticated
+    requests to protected endpoints.
     """
 
-    # Paths that don't require authentication
+    # Paths that never require authentication
     PUBLIC_PATHS = {
         "/",
         "/health",
@@ -30,12 +35,25 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "/api/v1/openapi.json",
     }
 
+    # Path prefixes that never require authentication
+    PUBLIC_PREFIXES = (
+        "/ws",
+        "/dashboard",
+        "/api/v1/health",
+        "/api/v1/dashboard/ws",
+        "/data/",
+    )
+
     async def dispatch(
         self, request: Request, call_next: Callable[[Request], Response]
     ) -> Response:
         """Process the request for authentication."""
         # Skip auth for public paths
         if request.url.path in self.PUBLIC_PATHS:
+            return await call_next(request)
+
+        # Skip auth for public prefixes
+        if any(request.url.path.startswith(p) for p in self.PUBLIC_PREFIXES):
             return await call_next(request)
 
         # Extract API key from headers
@@ -48,6 +66,18 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # Store extracted key in request state for dependency injection
         request.state.api_key = api_key
         request.state.authenticated = api_key is not None
+
+        # In production, enforce authentication on protected endpoints
+        settings = get_settings()
+        if settings.environment == "production" and not api_key:
+            logger.warning(
+                "Unauthenticated request blocked: %s %s",
+                request.method, request.url.path,
+            )
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Authentication required"},
+            )
 
         return await call_next(request)
 

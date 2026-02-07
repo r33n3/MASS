@@ -156,6 +156,24 @@ class MCPFinding(BaseModel):
     evidence: dict[str, Any]
     recommendation: str
 
+    # Location context - where the vulnerability exists
+    attack_surface: str = Field(
+        default="",
+        description="Description of where the vulnerability exists in the MCP tool interface"
+    )
+    vulnerable_input: str = Field(
+        default="",
+        description="The specific input/payload that triggered the finding"
+    )
+    vulnerable_output: str = Field(
+        default="",
+        description="The tool response that indicates the vulnerability"
+    )
+    workflow_context: str = Field(
+        default="",
+        description="Context about where this tool fits in AI workflows (e.g., 'User input → Tool → LLM response')"
+    )
+
 
 class MCPInterrogationResponse(BaseModel):
     """Response with interrogation job info."""
@@ -276,8 +294,12 @@ async def start_mcp_interrogation(
     )
 
 
+# Maximum time (seconds) an MCP interrogation job may run before being killed
+_INTERROGATION_TIMEOUT = 600  # 10 minutes
+
+
 async def _run_interrogation(job_id: str, config: InterrogationConfig) -> None:
-    """Run interrogation in background."""
+    """Run interrogation in background with timeout protection."""
     job = _jobs.get(job_id)
     if not job:
         return
@@ -285,19 +307,65 @@ async def _run_interrogation(job_id: str, config: InterrogationConfig) -> None:
     job["status"] = InterrogationStatus.CONNECTING.value
     job["started_at"] = datetime.utcnow().isoformat()
 
+    # Broadcast job started
+    await _broadcast_job_status(job_id)
+
     try:
-        result = await interrogate_mcp_server(config)
+        result = await asyncio.wait_for(
+            interrogate_mcp_server(config),
+            timeout=_INTERROGATION_TIMEOUT,
+        )
 
         job["status"] = result.status.value
         job["completed_at"] = datetime.utcnow().isoformat()
         job["result"] = result
         job["error"] = result.error
 
+    except asyncio.TimeoutError:
+        logger.warning("Interrogation %s timed out after %ds", job_id, _INTERROGATION_TIMEOUT)
+        job["status"] = InterrogationStatus.FAILED.value
+        job["completed_at"] = datetime.utcnow().isoformat()
+        job["error"] = f"Timed out after {_INTERROGATION_TIMEOUT}s"
+
     except Exception as e:
         logger.exception(f"Interrogation {job_id} failed")
         job["status"] = InterrogationStatus.FAILED.value
         job["completed_at"] = datetime.utcnow().isoformat()
         job["error"] = str(e)
+
+    # Broadcast final status
+    await _broadcast_job_status(job_id)
+
+
+async def _broadcast_job_status(job_id: str) -> None:
+    """Broadcast current interrogation job status via WebSocket."""
+    job = _jobs.get(job_id)
+    if not job:
+        return
+    try:
+        from mass.dashboard.websocket import broadcast_interrogation_update
+
+        result = job.get("result")
+        cfg = job.get("config", {})
+        name = cfg.get("name", job.get("name", ""))
+
+        # Derive duration from timestamps
+        duration = 0.0
+        if job.get("started_at"):
+            start = datetime.fromisoformat(job["started_at"])
+            end = datetime.fromisoformat(job["completed_at"]) if job.get("completed_at") else datetime.utcnow()
+            duration = (end - start).total_seconds()
+
+        await broadcast_interrogation_update(
+            job_id=job_id,
+            status=job["status"],
+            message=name,
+            strategies_run=getattr(result, "total_tests", 0) if result else 0,
+            successful_attacks=len(getattr(result, "findings", [])) if result else 0,
+            duration_seconds=duration,
+        )
+    except Exception:
+        logger.debug("Failed to broadcast interrogation update", exc_info=True)
 
 
 @router.get(
@@ -393,13 +461,13 @@ def _format_job_response(job: dict[str, Any]) -> MCPInterrogationResponse:
             inferred_risks = []
             for param in tool.parameters:
                 if param.is_command:
-                    inferred_risks.append("command_injection")
+                    inferred_risks.append("Command Injection")
                 if param.is_path:
-                    inferred_risks.append("path_traversal")
+                    inferred_risks.append("Path Traversal")
                 if param.is_url:
-                    inferred_risks.append("ssrf")
+                    inferred_risks.append("SSRF (Server-Side Request Forgery)")
                 if param.is_query:
-                    inferred_risks.append("sql_injection")
+                    inferred_risks.append("SQL Injection")
 
             tools.append(MCPToolInfo(
                 name=tool.name,
@@ -416,8 +484,31 @@ def _format_job_response(job: dict[str, Any]) -> MCPInterrogationResponse:
                 inferred_risks=list(set(inferred_risks)),
             ))
 
-        # Format findings
+        # Format findings with location context
         for finding in getattr(result, "findings", []):
+            # Build attack surface description
+            attack_surface = _build_attack_surface(finding)
+
+            # Extract vulnerable input/output from evidence
+            evidence = finding.evidence or {}
+            vulnerable_input = ""
+            vulnerable_output = ""
+
+            if "arguments" in evidence:
+                args = evidence["arguments"]
+                if finding.parameter_name and finding.parameter_name in args:
+                    vulnerable_input = str(args[finding.parameter_name])
+                else:
+                    vulnerable_input = str(args)
+
+            if "result_sample" in evidence:
+                vulnerable_output = str(evidence["result_sample"])[:200]
+            elif "indicator" in evidence:
+                vulnerable_output = f"Response contained: {evidence['indicator']}"
+
+            # Build workflow context
+            workflow_context = _build_workflow_context(finding)
+
             findings.append(MCPFinding(
                 id=finding.id,
                 tool_name=finding.tool_name,
@@ -428,6 +519,10 @@ def _format_job_response(job: dict[str, Any]) -> MCPInterrogationResponse:
                 description=finding.description,
                 evidence=finding.evidence,
                 recommendation=finding.recommendation,
+                attack_surface=attack_surface,
+                vulnerable_input=vulnerable_input,
+                vulnerable_output=vulnerable_output,
+                workflow_context=workflow_context,
             ))
 
         severity_counts = getattr(result, "severity_counts", {})
@@ -473,14 +568,154 @@ async def list_attack_categories(
 def _get_category_description(category: AttackCategory) -> str:
     """Get description for attack category."""
     descriptions = {
-        AttackCategory.COMMAND_INJECTION: "Test for OS command injection via tool parameters",
-        AttackCategory.PATH_TRAVERSAL: "Test for path traversal to access unauthorized files",
-        AttackCategory.SSRF: "Test for Server-Side Request Forgery to access internal resources",
-        AttackCategory.SQL_INJECTION: "Test for SQL injection in database-related tools",
-        AttackCategory.XSS: "Test for Cross-Site Scripting in output handling",
-        AttackCategory.TEMPLATE_INJECTION: "Test for template injection in rendering tools",
-        AttackCategory.LDAP_INJECTION: "Test for LDAP injection in directory tools",
-        AttackCategory.PROMPT_INJECTION: "Test for prompt injection in AI-powered tools",
-        AttackCategory.DENIAL_OF_SERVICE: "Test for resource exhaustion vulnerabilities",
+        AttackCategory.COMMAND_INJECTION: (
+            "Test for OS Command Injection - a vulnerability where an attacker can execute "
+            "arbitrary operating system commands on the server by injecting malicious input "
+            "into parameters that are passed to shell commands."
+        ),
+        AttackCategory.PATH_TRAVERSAL: (
+            "Test for Path Traversal (Directory Traversal) - a vulnerability where an attacker "
+            "can access files and directories outside the intended directory by manipulating "
+            "file path parameters using sequences like '../' to navigate the filesystem."
+        ),
+        AttackCategory.SSRF: (
+            "Test for SSRF (Server-Side Request Forgery) - a vulnerability where an attacker "
+            "can make the server send HTTP requests to arbitrary destinations, potentially "
+            "accessing internal services, cloud metadata endpoints, or other protected resources."
+        ),
+        AttackCategory.SQL_INJECTION: (
+            "Test for SQL Injection (SQLi) - a vulnerability where an attacker can inject "
+            "malicious SQL code into database queries, potentially reading, modifying, or "
+            "deleting data, or executing administrative operations on the database."
+        ),
+        AttackCategory.XSS: (
+            "Test for XSS (Cross-Site Scripting) - a vulnerability where an attacker can "
+            "inject malicious scripts that execute in the context of other users' browsers, "
+            "potentially stealing session tokens, credentials, or performing actions on their behalf."
+        ),
+        AttackCategory.TEMPLATE_INJECTION: (
+            "Test for SSTI (Server-Side Template Injection) - a vulnerability where an attacker "
+            "can inject template directives that are executed by the server's template engine, "
+            "potentially leading to remote code execution or information disclosure."
+        ),
+        AttackCategory.LDAP_INJECTION: (
+            "Test for LDAP Injection - a vulnerability where an attacker can manipulate LDAP "
+            "(Lightweight Directory Access Protocol) queries to bypass authentication, access "
+            "unauthorized data, or modify directory entries."
+        ),
+        AttackCategory.PROMPT_INJECTION: (
+            "Test for Prompt Injection - a vulnerability in AI/LLM-powered tools where an "
+            "attacker can override system instructions or manipulate the model's behavior "
+            "by crafting malicious input that is interpreted as instructions."
+        ),
+        AttackCategory.DENIAL_OF_SERVICE: (
+            "Test for DoS (Denial of Service) - a vulnerability where an attacker can exhaust "
+            "system resources (CPU, memory, disk, network) causing the service to become "
+            "unavailable or unresponsive to legitimate users."
+        ),
     }
     return descriptions.get(category, "Security testing for this attack vector")
+
+
+def _build_attack_surface(finding) -> str:
+    """Build a human-readable description of where the vulnerability exists."""
+    category = finding.attack_category
+    tool = finding.tool_name
+    param = finding.parameter_name
+
+    # Map attack categories to attack surface descriptions
+    surface_templates = {
+        "command_injection": (
+            f"MCP Tool '{tool}' → Parameter '{param}' accepts user input that is passed to "
+            f"OS command execution. Malicious input can escape the intended command context."
+        ),
+        "path_traversal": (
+            f"MCP Tool '{tool}' → Parameter '{param}' accepts file paths. Attackers can use "
+            f"directory traversal sequences (../) to access files outside the intended directory."
+        ),
+        "ssrf": (
+            f"MCP Tool '{tool}' → Parameter '{param}' accepts URLs. The server fetches these URLs, "
+            f"allowing attackers to reach internal services or cloud metadata endpoints."
+        ),
+        "sql_injection": (
+            f"MCP Tool '{tool}' → Parameter '{param}' is used in database queries. User input "
+            f"can modify query logic to extract, modify, or delete data."
+        ),
+        "prompt_injection": (
+            f"MCP Tool '{tool}' → Parameter '{param}' feeds into an LLM prompt. Attackers can "
+            f"inject instructions that override the system prompt or manipulate model behavior."
+        ),
+        "template_injection": (
+            f"MCP Tool '{tool}' → Parameter '{param}' is rendered by a template engine. "
+            f"Malicious template syntax can execute arbitrary code on the server."
+        ),
+        "restriction_bypass": (
+            f"MCP Tool '{tool}' → Security restrictions were bypassed. The tool executed an "
+            f"operation that should have been blocked by access controls."
+        ),
+        "extra_action": (
+            f"MCP Tool '{tool}' → The tool performed actions beyond its documented scope. "
+            f"This indicates potential Confused Deputy or privilege escalation issues."
+        ),
+        "information_leakage": (
+            f"MCP Tool '{tool}' → Sensitive data was exposed in the tool's response. "
+            f"Output sanitization is missing or insufficient."
+        ),
+    }
+
+    return surface_templates.get(
+        category,
+        f"MCP Tool '{tool}' → Parameter '{param}' is vulnerable to {category.replace('_', ' ')}."
+    )
+
+
+def _build_workflow_context(finding) -> str:
+    """Build a description of how this vulnerability fits in AI workflows."""
+    category = finding.attack_category
+    tool = finding.tool_name
+
+    # Common AI workflow patterns where MCP tools are used
+    workflow_contexts = {
+        "command_injection": (
+            f"Workflow Impact: User message → LLM decides to call '{tool}' → "
+            f"Malicious input executes OS commands → Attacker gains server access. "
+            f"This is critical because LLMs may call tools based on user requests without "
+            f"understanding the security implications of the input."
+        ),
+        "path_traversal": (
+            f"Workflow Impact: User asks for file content → LLM calls '{tool}' with user-provided path → "
+            f"Attacker reads /etc/passwd, .env files, or source code. "
+            f"AI agents often need file access, making this a high-value attack vector."
+        ),
+        "ssrf": (
+            f"Workflow Impact: User provides URL → LLM calls '{tool}' to fetch content → "
+            f"Attacker accesses internal services (databases, admin panels) or cloud metadata. "
+            f"SSRF is particularly dangerous in cloud environments where metadata contains credentials."
+        ),
+        "sql_injection": (
+            f"Workflow Impact: User query → LLM generates database lookup via '{tool}' → "
+            f"Attacker extracts all database records or modifies data. "
+            f"AI-to-database workflows must use parameterized queries exclusively."
+        ),
+        "prompt_injection": (
+            f"Workflow Impact: User input → Tool '{tool}' processes input → Result fed to LLM → "
+            f"Attacker's hidden instructions override system behavior. "
+            f"This can cause the AI to ignore safety guidelines or leak system prompts."
+        ),
+        "restriction_bypass": (
+            f"Workflow Impact: LLM calls '{tool}' with validated input → Tool ignores restrictions → "
+            f"Attacker accesses resources that should be blocked. "
+            f"Defense-in-depth is required; don't rely solely on LLM-side validation."
+        ),
+        "information_leakage": (
+            f"Workflow Impact: Tool '{tool}' returns data to LLM → LLM includes sensitive data in response → "
+            f"User sees credentials, PII, or internal information. "
+            f"All tool outputs should be sanitized before reaching the user."
+        ),
+    }
+
+    return workflow_contexts.get(
+        category,
+        f"Workflow Impact: When '{tool}' is called in an AI workflow with malicious input, "
+        f"the {category.replace('_', ' ')} vulnerability can be exploited to compromise the system."
+    )

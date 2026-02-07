@@ -129,16 +129,11 @@ async def broadcast_scan_update(
     progress: float = 0.0,
     findings_count: int = 0,
     message: str = "",
+    current_phase: str = "",
+    jobs_completed: int = 0,
+    jobs_total: int = 0,
 ) -> None:
-    """Broadcast a scan update to all connected clients.
-
-    Args:
-        scan_id: ID of the scan.
-        status: Current scan status.
-        progress: Progress percentage (0-100).
-        findings_count: Number of findings so far.
-        message: Status message.
-    """
+    """Broadcast a scan update to all connected clients."""
     await manager.broadcast({
         "type": "scan_update",
         "scan_id": scan_id,
@@ -146,6 +141,9 @@ async def broadcast_scan_update(
         "progress": progress,
         "findings_count": findings_count,
         "message": message,
+        "current_phase": current_phase,
+        "jobs_completed": jobs_completed,
+        "jobs_total": jobs_total,
         "timestamp": datetime.utcnow().isoformat(),
     })
 
@@ -188,5 +186,75 @@ async def broadcast_scan_complete(
         "status": status,
         "duration_seconds": duration_seconds,
         "findings_count": findings_count,
+        "timestamp": datetime.utcnow().isoformat(),
+    })
+
+
+async def broadcast_verdict_ready(
+    scan_id: str,
+    risk_level: str,
+    overall_assessment: str,
+) -> None:
+    """Broadcast that a verdict is ready for a scan.
+
+    Args:
+        scan_id: ID of the scan.
+        risk_level: Overall risk level from the verdict.
+        overall_assessment: One-sentence assessment.
+    """
+    await manager.broadcast({
+        "type": "verdict_ready",
+        "scan_id": scan_id,
+        "risk_level": risk_level,
+        "overall_assessment": overall_assessment,
+        "timestamp": datetime.utcnow().isoformat(),
+    })
+
+
+async def broadcast_threat_model_ready(
+    scan_id: str,
+    overall_risk_level: str,
+    total_threats: int,
+    data_classification: str,
+) -> None:
+    """Broadcast that a threat model is ready for a scan.
+
+    Args:
+        scan_id: ID of the scan.
+        overall_risk_level: Overall risk level from the threat model.
+        total_threats: Total number of threats identified.
+        data_classification: Inferred data classification level.
+    """
+    await manager.broadcast({
+        "type": "threat_model_ready",
+        "scan_id": scan_id,
+        "overall_risk_level": overall_risk_level,
+        "total_threats": total_threats,
+        "data_classification": data_classification,
+        "timestamp": datetime.utcnow().isoformat(),
+    })
+
+
+async def broadcast_interrogation_update(
+    job_id: str,
+    status: str,
+    message: str = "",
+    strategies_run: int = 0,
+    successful_attacks: int = 0,
+    attacker_model: str = "",
+    target_model: str = "",
+    duration_seconds: float = 0.0,
+) -> None:
+    """Broadcast an interrogation job update to all connected clients."""
+    await manager.broadcast({
+        "type": "interrogation_update",
+        "job_id": job_id,
+        "status": status,
+        "message": message,
+        "strategies_run": strategies_run,
+        "successful_attacks": successful_attacks,
+        "attacker_model": attacker_model,
+        "target_model": target_model,
+        "duration_seconds": duration_seconds,
         "timestamp": datetime.utcnow().isoformat(),
     })

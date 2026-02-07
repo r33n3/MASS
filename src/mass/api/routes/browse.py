@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from mass.api.dependencies import CurrentTenantDep
 from mass.analyzers.model_file.magic import identify_file, MagicSignature
+from mass.core.filesystem import EXCLUDED_DIRS as _BROWSE_EXCLUDED_DIRS
 
 router = APIRouter()
 
@@ -239,8 +240,7 @@ async def discover_model_files(
         # Skip common non-model directories and inaccessible ones
         accessible_dirs = []
         for d in dirs:
-            if d in ("__pycache__", "node_modules", ".git", "venv", ".venv",
-                     ".cache", ".npm", ".pip", "dist", "build"):
+            if d in _BROWSE_EXCLUDED_DIRS:
                 continue
             dir_path = os.path.join(root, d)
             try:

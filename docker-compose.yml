@@ -91,6 +91,11 @@ services:
       MASS_DEBUG: "true"
       OLLAMA_HOST: http://ollama:11434
       OLLAMA_ATTACKER_HOST: http://ollama-attacker:11434
+      # Chat provider API keys (uncomment and set to enable)
+      # OPENAI_API_KEY: "sk-..."
+      # ANTHROPIC_API_KEY: "sk-ant-..."
+      # GEMINI_API_KEY: "AI..."
+      # XAI_API_KEY: "xai-..."
     ports:
       - "8000:8000"
     volumes:

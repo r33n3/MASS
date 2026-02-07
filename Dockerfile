@@ -50,6 +50,7 @@ RUN pip install .
 # Copy application code (exclude dev files)
 COPY src ./src
 COPY alembic.ini ./
+COPY docs ./docs
 
 # Create non-root user
 RUN useradd -m -u 1000 mass && \

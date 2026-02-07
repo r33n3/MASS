@@ -11,6 +11,7 @@ import logging
 from typing import Any
 
 from mass.core.findings import Finding as CoreFinding
+from mass.core.fingerprint import compute_fingerprint
 from mass.core.types import Severity
 from mass.orchestration.service import ScanProgress
 
@@ -65,7 +66,7 @@ class ProgressBridge:
                 # Don't block waiting for result - fire and forget
                 future.add_done_callback(self._handle_async_error)
             except Exception:
-                logger.debug("Failed to schedule progress persistence", exc_info=True)
+                logger.warning("Failed to schedule progress persistence", exc_info=True)
 
     def store_findings(self, findings: list[CoreFinding]) -> None:
         """Sync callback to store findings incrementally after each job.
@@ -83,7 +84,7 @@ class ProgressBridge:
             )
             future.add_done_callback(self._handle_async_error)
         except Exception:
-            logger.debug("Failed to schedule finding storage", exc_info=True)
+            logger.warning("Failed to schedule finding storage", exc_info=True)
 
     async def _persist_progress(self, progress: ScanProgress) -> None:
         """Async: update Scan row with current progress."""
@@ -106,7 +107,7 @@ class ProgressBridge:
                 await session.commit()
             except Exception:
                 await session.rollback()
-                logger.debug("Failed to persist progress", exc_info=True)
+                logger.warning("Failed to persist progress for scan %s", self._scan_id, exc_info=True)
                 return
 
         # Broadcast via WebSocket (non-blocking, best-effort)
@@ -118,6 +119,9 @@ class ProgressBridge:
                 progress=progress.progress_percent,
                 findings_count=progress.findings_count,
                 message=progress.message,
+                current_phase=progress.current_phase,
+                jobs_completed=progress.jobs_completed,
+                jobs_total=progress.jobs_total,
             )
         except Exception:
             logger.debug("Failed to broadcast progress", exc_info=True)
@@ -146,6 +150,14 @@ class ProgressBridge:
             if finding.metadata:
                 meta_data.update(finding.metadata)
 
+            fp = compute_fingerprint(
+                category=finding.category.value,
+                title=finding.title,
+                file_path=finding.file_path,
+                rule_id=None,
+                component_name=finding.component_name,
+            )
+
             db_finding = DBFinding(
                 scan_id=self._scan_id,
                 tenant_id=self._tenant_id,
@@ -162,6 +174,7 @@ class ProgressBridge:
                 evidence=json.dumps([e.model_dump(mode="json") for e in finding.evidence]) if finding.evidence else None,
                 references=json.dumps(finding.remediation.references) if finding.remediation and finding.remediation.references else None,
                 meta=json.dumps(meta_data) if meta_data else None,
+                fingerprint=fp,
             )
             db_findings.append(db_finding)
 
@@ -219,10 +232,28 @@ class ProgressBridge:
         except Exception:
             logger.debug("Failed to broadcast findings", exc_info=True)
 
+        # Publish FINDING_CREATED events
+        try:
+            from mass.core.events import get_event_bus, Event, EventType
+            bus = get_event_bus()
+            for finding in findings:
+                await bus.publish(Event(
+                    type=EventType.FINDING_CREATED,
+                    data={
+                        "scan_id": self._scan_id,
+                        "finding_title": finding.title,
+                        "severity": finding.severity.value,
+                        "category": finding.category.value,
+                    },
+                    tenant_id=self._tenant_id,
+                ))
+        except Exception:
+            logger.debug("Failed to publish FINDING_CREATED events", exc_info=True)
+
     @staticmethod
     def _handle_async_error(future: asyncio.Future) -> None:
         """Log errors from fire-and-forget async tasks."""
         try:
             future.result()
         except Exception:
-            logger.debug("Async bridge task failed", exc_info=True)
+            logger.warning("Async bridge task failed", exc_info=True)

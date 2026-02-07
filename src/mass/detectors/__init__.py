@@ -19,6 +19,8 @@ import mass.detectors.refusal  # noqa: F401
 import mass.detectors.system_prompt  # noqa: F401
 import mass.detectors.pii  # noqa: F401
 import mass.detectors.instruction_following  # noqa: F401
+import mass.detectors.judge  # noqa: F401
+import mass.detectors.harm  # noqa: F401
 
 __all__ = [
     "BaseDetector",

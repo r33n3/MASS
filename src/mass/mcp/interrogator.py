@@ -437,34 +437,55 @@ class MCPInterrogator:
         """Get remediation recommendation for attack category."""
         recommendations = {
             AttackCategory.COMMAND_INJECTION: (
-                "Validate and sanitize all input before passing to shell commands. "
-                "Use parameterized execution APIs instead of string concatenation. "
-                "Implement allowlists for permitted commands."
+                "OS Command Injection Remediation: Validate and sanitize all input before "
+                "passing to shell commands. Use parameterized execution APIs instead of string "
+                "concatenation. Implement allowlists for permitted commands. Avoid shell=True "
+                "in subprocess calls and use array-based command execution."
             ),
             AttackCategory.PATH_TRAVERSAL: (
-                "Validate file paths against an allowlist of permitted directories. "
-                "Use canonical path resolution and reject paths containing '..' sequences. "
-                "Implement chroot or container isolation for file operations."
+                "Path Traversal (Directory Traversal) Remediation: Validate file paths against "
+                "an allowlist of permitted directories. Use canonical path resolution (realpath) "
+                "and reject paths containing '..' sequences or that resolve outside the allowed "
+                "directory. Implement chroot or container isolation for file operations."
             ),
             AttackCategory.SSRF: (
-                "Validate and allowlist permitted URLs and domains. "
-                "Block access to internal IP ranges (10.x, 172.16-31.x, 192.168.x, 169.254.x). "
-                "Use a proxy service for outbound requests with egress filtering."
+                "SSRF (Server-Side Request Forgery) Remediation: Validate and allowlist permitted "
+                "URLs and domains. Block access to internal IP ranges (10.x, 172.16-31.x, "
+                "192.168.x, 169.254.x) and cloud metadata endpoints (169.254.169.254). Use a "
+                "proxy service for outbound requests with strict egress filtering."
             ),
             AttackCategory.SQL_INJECTION: (
-                "Use parameterized queries or prepared statements. "
-                "Never concatenate user input into SQL strings. "
-                "Implement input validation and output encoding."
+                "SQL Injection (SQLi) Remediation: Use parameterized queries or prepared "
+                "statements exclusively. Never concatenate user input into SQL strings. "
+                "Implement input validation, use ORM frameworks, and apply principle of "
+                "least privilege for database accounts."
             ),
             AttackCategory.PROMPT_INJECTION: (
-                "Clearly separate user input from system instructions. "
-                "Use structured prompts with input markers. "
-                "Implement output validation to detect instruction leakage."
+                "Prompt Injection Remediation: Clearly separate user input from system "
+                "instructions using delimiters or structured formats. Implement input "
+                "sanitization to remove instruction-like patterns. Use output validation "
+                "to detect instruction leakage or unexpected behavior changes."
             ),
             AttackCategory.TEMPLATE_INJECTION: (
-                "Disable dangerous template features (e.g., Jinja2 sandboxing). "
-                "Never render user input as template code. "
-                "Use safe alternatives like string formatting."
+                "SSTI (Server-Side Template Injection) Remediation: Disable dangerous template "
+                "features and enable sandbox mode (e.g., Jinja2 SandboxedEnvironment). Never "
+                "render user input as template code. Use safe alternatives like string "
+                "formatting or pre-compiled templates."
+            ),
+            AttackCategory.XSS: (
+                "XSS (Cross-Site Scripting) Remediation: Encode all user-supplied data before "
+                "rendering in HTML context. Use Content-Security-Policy headers. Implement "
+                "input validation and use frameworks that auto-escape output by default."
+            ),
+            AttackCategory.LDAP_INJECTION: (
+                "LDAP Injection Remediation: Use parameterized LDAP queries or prepared "
+                "statements. Escape special LDAP characters in user input. Validate input "
+                "against expected patterns and implement strict access controls."
+            ),
+            AttackCategory.DENIAL_OF_SERVICE: (
+                "DoS (Denial of Service) Remediation: Implement rate limiting and request "
+                "throttling. Set appropriate timeouts and resource limits. Use pagination "
+                "for large data sets and validate input sizes before processing."
             ),
         }
         return recommendations.get(category, "Review and implement appropriate input validation.")

@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 from typing import Sequence
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -123,6 +123,52 @@ class ScanRepository(BaseRepository[Scan]):
         )
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
+
+    async def get_latest_by_deployments(
+        self, deployment_ids: list[str]
+    ) -> dict[str, "Scan"]:
+        """Get the most recent scan for each deployment in a single query.
+
+        Returns a dict mapping deployment_id -> latest Scan.
+        """
+        if not deployment_ids:
+            return {}
+
+        # Subquery: max created_at per deployment
+        subq = (
+            select(
+                Scan.deployment_id,
+                func.max(Scan.created_at).label("max_created"),
+            )
+            .where(Scan.deployment_id.in_(deployment_ids))
+            .group_by(Scan.deployment_id)
+            .subquery()
+        )
+        stmt = select(Scan).join(
+            subq,
+            (Scan.deployment_id == subq.c.deployment_id)
+            & (Scan.created_at == subq.c.max_created),
+        )
+        result = await self.session.execute(stmt)
+        return {s.deployment_id: s for s in result.scalars().all()}
+
+    async def count_by_deployments(
+        self, deployment_ids: list[str]
+    ) -> dict[str, int]:
+        """Count scans per deployment in a single query.
+
+        Returns a dict mapping deployment_id -> scan count.
+        """
+        if not deployment_ids:
+            return {}
+
+        stmt = (
+            select(Scan.deployment_id, func.count(Scan.id).label("cnt"))
+            .where(Scan.deployment_id.in_(deployment_ids))
+            .group_by(Scan.deployment_id)
+        )
+        result = await self.session.execute(stmt)
+        return {row.deployment_id: row.cnt for row in result}
 
     async def list_running(self, tenant_id: str | None = None) -> Sequence[Scan]:
         """List currently running scans.

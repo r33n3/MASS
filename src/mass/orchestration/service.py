@@ -418,30 +418,11 @@ class ScanService:
                 except Exception:
                     pass  # Ignore callback errors
 
-    # Directories to exclude from recursive scanning.
-    # These contain build artifacts, compiled code, or vendored dependencies
-    # that are not relevant to AI security analysis.
-    # TODO: Replace with Discovery API (P0 future enhancement) for intelligent
-    #       component discovery across local, AWS, Azure, and GCP environments
-    EXCLUDED_DIRS = {
-        ".git", "__pycache__", "node_modules", ".venv", "venv", "env",
-        ".tox", ".mypy_cache", ".pytest_cache", ".ruff_cache",
-        "build", "dist", "eggs",
-        # Native/compiled model runtimes (not the model files themselves)
-        "llama.cpp", "sd.cpp", "whisper.cpp",
-        # Binary/compiled output
-        "bin", "obj", "target", "out",
-        # Vendored/downloaded dependencies
-        "vendor", "third_party", "external",
-        # Large framework directories
-        "framepack_cu126_torch26",
-    }
-
     def _walk_files(self, root_path: str) -> list[str]:
         """Walk directory tree, pruning excluded directories.
 
-        Uses os.walk with topdown=True to skip entire subtrees,
-        avoiding the performance issue of rglob traversing 50K+ files.
+        Uses the shared walk_with_exclusions() from mass.core.filesystem
+        for consistency across the platform.
 
         Args:
             root_path: Root directory to walk.
@@ -449,22 +430,9 @@ class ScanService:
         Returns:
             List of relative file paths (using forward slashes).
         """
-        import os
+        from mass.core.filesystem import walk_with_exclusions
 
-        files = []
-        for dirpath, dirnames, filenames in os.walk(root_path, topdown=True):
-            # Prune excluded directories IN PLACE so os.walk skips them
-            dirnames[:] = [
-                d for d in dirnames
-                if d not in self.EXCLUDED_DIRS and not d.endswith(".egg-info")
-            ]
-            rel_dir = os.path.relpath(dirpath, root_path)
-            for filename in filenames:
-                if rel_dir == ".":
-                    files.append(filename)
-                else:
-                    files.append(f"{rel_dir}/{filename}".replace("\\", "/"))
-        return files
+        return walk_with_exclusions(root_path)
 
     def _has_matching_files(self, file_list: list[str], *patterns: str) -> bool:
         """Check if any files match the given patterns.

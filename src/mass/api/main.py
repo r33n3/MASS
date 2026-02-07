@@ -6,10 +6,13 @@ Creates and configures the MASS API application.
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from mass.core.config import get_settings
 from mass.api.middleware.errors import setup_exception_handlers
@@ -31,6 +34,9 @@ from mass.api.routes import (
     interrogation,
     browse,
     mcp_interrogation,
+    chat,
+    targets,
+    docs,
 )
 
 
@@ -59,6 +65,32 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             "Scan queue unavailable - scans will run in-process via BackgroundTasks"
         )
 
+    # Mark any scans left in "running"/"pending" as failed (stale from previous crash)
+    try:
+        from mass.storage.database import get_session
+        from sqlalchemy import update
+        from mass.storage.models.deployment import Scan
+
+        async with get_session() as session:
+            result = await session.execute(
+                update(Scan)
+                .where(Scan.status.in_(["running", "pending"]))
+                .values(
+                    status="failed",
+                    error_message="Server restarted while scan was in progress",
+                )
+            )
+            if result.rowcount:
+                await session.commit()
+                logger.warning(
+                    "Cleaned up %d stale running/pending scans from previous session",
+                    result.rowcount,
+                )
+            else:
+                await session.rollback()
+    except Exception as e:
+        logger.debug("Stale scan cleanup skipped: %s", e)
+
     yield
 
     # Shutdown - close scan queue Redis connection
@@ -77,7 +109,7 @@ def create_app() -> FastAPI:
 
     app = FastAPI(
         title="MASS API",
-        description="Model Analysis Security & Safety - AI Deployment Security Scanner",
+        description="Model & Application Security Suite - AI Deployment Security Platform",
         version="0.1.0",
         docs_url=None,  # Custom docs endpoint
         redoc_url=None,  # Custom redoc endpoint
@@ -96,6 +128,10 @@ def create_app() -> FastAPI:
 
     # Add request logging middleware
     app.add_middleware(RequestLoggingMiddleware)
+
+    # Add authentication middleware (extracts keys; enforces in production)
+    from mass.api.middleware.auth import AuthMiddleware
+    app.add_middleware(AuthMiddleware)
 
     # Setup exception handlers
     setup_exception_handlers(app)
@@ -121,6 +157,9 @@ def create_app() -> FastAPI:
     app.include_router(interrogation.router, prefix=f"{api_prefix}/interrogation", tags=["Interrogation"])
     app.include_router(browse.router, prefix=f"{api_prefix}/browse", tags=["Browse"])
     app.include_router(mcp_interrogation.router, prefix=f"{api_prefix}/mcp-interrogation", tags=["MCP Interrogation"])
+    app.include_router(chat.router, prefix=f"{api_prefix}/chat", tags=["Chat"])
+    app.include_router(targets.router, prefix=f"{api_prefix}/targets", tags=["Targets"])
+    app.include_router(docs.router, prefix=f"{api_prefix}/docs", tags=["Documentation"])
 
     # WebSocket for real-time scan updates
     from mass.dashboard.websocket import router as ws_router
@@ -142,6 +181,11 @@ def create_app() -> FastAPI:
             openapi_url="/api/v1/openapi.json",
             title="MASS API - ReDoc",
         )
+
+    # Serve /data/ static files (mascot image, etc.)
+    data_dir = Path("/app/data")
+    if data_dir.is_dir():
+        app.mount("/data", StaticFiles(directory=str(data_dir)), name="data")
 
     return app
 
