@@ -5826,7 +5826,14 @@
         // API base URL - dynamically resolved from user settings
         // Points to the main MASS API backend
         function getApiBase() {
-            return (localStorage.getItem('mass_api_endpoint') || 'http://localhost:8000').replace(/\/$/, '');
+            const stored = localStorage.getItem('mass_api_endpoint');
+            if (stored) return stored.replace(/\/$/, '');
+            // Auto-detect: if served through proxy (port 80/443), use same origin
+            // so requests go through nginx /api/ -> mass-api. Otherwise fallback
+            // to direct API on port 8000.
+            const port = window.location.port;
+            if (!port || port === '80' || port === '443') return window.location.origin;
+            return 'http://localhost:8000';
         }
 
         const pageIcons = {
@@ -7866,6 +7873,8 @@
                     // Auto-load dashboard data
                     loadDashboardStats();
                     refreshScans();
+                    refreshTargets();
+                    refreshInterrogations();
 
                     // Reconnect WebSocket with new endpoint
                     _massWS.disconnect();
@@ -9505,6 +9514,11 @@
 
             // Render targets from localStorage
             refreshTargets();
+
+            // If no API key is set, show the API key modal immediately
+            if (!localStorage.getItem('mass_api_key')) {
+                showModal('apiKeyModal');
+            }
 
             // Test API connection and load data
             const connected = await checkApiHealth();
