@@ -184,8 +184,7 @@ class ProgressBridge:
 
         async with self._session_factory() as session:
             try:
-                for db_finding in db_findings:
-                    session.add(db_finding)
+                session.add_all(db_findings)
                 await session.flush()
 
                 # Atomically increment finding counts on the Scan record

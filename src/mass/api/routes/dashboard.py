@@ -4,12 +4,18 @@ Provides DB-backed dashboard stats, scan listing, and findings
 for the MASS dashboard UI.
 """
 
+import time
 from datetime import datetime, timezone
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from sqlalchemy import func, select
+
+# Simple TTL cache for dashboard stats (keyed by tenant_id)
+_stats_cache: dict[str, tuple[float, Any]] = {}
+_STATS_CACHE_TTL = 10.0  # seconds
 
 from mass.api.dependencies import (
     CurrentTenantDep,
@@ -164,6 +170,11 @@ async def get_dashboard_stats(
     """Get dashboard statistics from the database."""
     tenant_id = tenant.tenant_id
 
+    # Check cache first
+    cached = _stats_cache.get(tenant_id)
+    if cached and (time.monotonic() - cached[0]) < _STATS_CACHE_TTL:
+        return cached[1]
+
     # Total scans
     total_scans = await scan_repo.count(tenant_id=tenant_id)
 
@@ -240,7 +251,7 @@ async def get_dashboard_stats(
     result = await db.execute(remediated_stmt)
     remediated_findings = result.scalar() or 0
 
-    return DashboardStats(
+    stats = DashboardStats(
         total_scans=total_scans,
         active_scans=active_scans,
         total_findings=total_findings,
@@ -252,6 +263,11 @@ async def get_dashboard_stats(
         avg_scan_duration=float(avg_duration),
         total_deployments=total_deployments,
     )
+
+    # Update cache
+    _stats_cache[tenant_id] = (time.monotonic(), stats)
+
+    return stats
 
 
 @router.get("/scans", response_model=list[DashboardScanItem])

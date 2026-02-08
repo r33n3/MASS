@@ -417,6 +417,9 @@ class ScanExecutionService:
                 except Exception:
                     logger.debug("Failed to publish SCAN_COMPLETED event", exc_info=True)
 
+                # Drain queue: start next queued scan if capacity available
+                await self._drain_queued_scans()
+
             except Exception as e:
                 logger.exception(f"Scan {scan_id} failed: {e}")
                 try:
@@ -455,5 +458,56 @@ class ScanExecutionService:
                     except Exception:
                         logger.debug("Failed to publish SCAN_FAILED event", exc_info=True)
 
+                    # Drain queue: start next queued scan if capacity available
+                    await self._drain_queued_scans()
+
                 except Exception as update_error:
                     logger.exception(f"Failed to update scan status: {update_error}")
+
+    async def _drain_queued_scans(self) -> None:
+        """Pick up the next queued scan and start it if capacity allows.
+
+        Called after a scan completes or fails to keep the pipeline moving.
+        """
+        try:
+            from mass.core.config import get_settings
+            from sqlalchemy import select, update
+
+            settings = get_settings()
+
+            async with get_session() as session:
+                scan_repo = ScanRepository(session)
+
+                # Count currently active scans (across all tenants)
+                running = await scan_repo.count(status="running")
+                pending = await scan_repo.count(status="pending")
+
+                if running + pending >= settings.scan_max_concurrent:
+                    return  # Still at capacity
+
+                # Find the oldest queued scan
+                stmt = (
+                    select(Scan)
+                    .where(Scan.status == "queued")
+                    .order_by(Scan.created_at.asc())
+                    .limit(1)
+                )
+                result = await session.execute(stmt)
+                queued_scan = result.scalar_one_or_none()
+
+                if not queued_scan:
+                    return  # Nothing queued
+
+                # Transition to pending
+                queued_scan.status = ScanStatus.PENDING.value
+                await session.commit()
+
+                logger.info(
+                    "Draining queue: starting queued scan %s", queued_scan.id
+                )
+
+                # Dispatch via background task
+                asyncio.create_task(self.execute_scan(queued_scan.id))
+
+        except Exception:
+            logger.debug("Queue drain failed (non-fatal)", exc_info=True)

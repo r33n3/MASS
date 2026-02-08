@@ -10,6 +10,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from mass.core.filesystem import EXCLUDED_DIRS as _SHARED_EXCLUDED_DIRS
 from mass.core.types import ComponentType
 from mass.analyzers.deployment.manifest import Component, DependencyInfo
 
@@ -37,25 +38,8 @@ class ComponentDiscovery:
         "Thumbs.db",
     ]
 
-    # Directories to skip entirely during traversal.
-    # Using os.walk with topdown=True these are pruned so we never
-    # descend into them (unlike rglob which traverses everything).
-    IGNORE_DIRS = {
-        ".git", ".svn", ".hg",
-        "__pycache__", "node_modules",
-        ".venv", "venv", "env",
-        ".tox", ".mypy_cache", ".pytest_cache", ".ruff_cache",
-        "build", "dist", "eggs",
-        "coverage", ".coverage", "htmlcov",
-        # Native/compiled ML runtimes (not the model files themselves)
-        "llama.cpp", "sd.cpp", "whisper.cpp",
-        # Binary/compiled output
-        "bin", "obj", "target", "out",
-        # Vendored/downloaded dependencies
-        "vendor", "third_party", "external",
-        # Large framework directories
-        "framepack_cu126_torch26",
-    }
+    # Shared exclusion list — single source of truth in mass.core.filesystem
+    IGNORE_DIRS = _SHARED_EXCLUDED_DIRS
 
     # File patterns for different component types
     COMPONENT_PATTERNS = {

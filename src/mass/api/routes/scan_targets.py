@@ -255,16 +255,30 @@ async def create_scan_target(
         tenant_id=tenant.tenant_id, status="pending",
     )
     if active_count + pending_count >= settings.scan_max_concurrent:
+        # Queue the scan instead of rejecting — it will be picked up
+        # when capacity frees up (by the worker poll loop or next request)
+        queued_scan = Scan(
+            tenant_id=tenant.tenant_id,
+            deployment_id=created_deployment.id,
+            profile=request.profile,
+            status="queued",
+            total_findings=0,
+            critical_findings=0,
+            high_findings=0,
+            medium_findings=0,
+            low_findings=0,
+        )
+        created_queued = await scan_repo.create(queued_scan)
         await db.commit()
         return ScanTargetResponse(
             deployment_id=created_deployment.id,
-            scan_id=None,
+            scan_id=created_queued.id,
             target_type=request.target_type.value,
-            status="registered",
+            status="queued",
             message=(
-                f"Target registered but scan deferred: concurrent limit "
-                f"reached ({settings.scan_max_concurrent}). "
-                f"Use POST /scans to start when capacity is available."
+                f"Target registered and scan queued (position: "
+                f"{pending_count + 1}). Will start automatically when "
+                f"capacity is available."
             ),
         )
 

@@ -91,7 +91,22 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception as e:
         logger.debug("Stale scan cleanup skipped: %s", e)
 
+    # Start WebSocket Redis pub/sub listener for cross-process broadcasting
+    try:
+        from mass.dashboard.websocket import manager as ws_manager
+        await ws_manager.start_redis_listener()
+        logger.info("WebSocket Redis pub/sub listener started")
+    except Exception as e:
+        logger.debug("WebSocket Redis listener not started: %s", e)
+
     yield
+
+    # Shutdown - close WebSocket Redis listener
+    try:
+        from mass.dashboard.websocket import manager as ws_manager
+        await ws_manager.shutdown()
+    except Exception:
+        pass
 
     # Shutdown - close scan queue Redis connection
     from mass.api.dependencies import close_scan_queue
