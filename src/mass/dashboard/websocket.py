@@ -139,15 +139,27 @@ class ConnectionManager:
         self._redis_listener_task = asyncio.create_task(self._redis_listen_loop())
 
     async def _redis_listen_loop(self) -> None:
-        """Long-running loop: subscribe to Redis channel, deliver locally."""
-        while True:
-            try:
-                r = await self._get_redis()
-                if r is None:
-                    await asyncio.sleep(5)
-                    continue
+        """Long-running loop: subscribe to Redis channel, deliver locally.
 
-                pubsub = r.pubsub()
+        Uses a dedicated Redis connection with no socket_timeout since
+        pub/sub is a long-lived blocking read.
+        """
+        while True:
+            sub_redis = None
+            try:
+                from mass.core.config import get_settings
+                import redis.asyncio as aioredis
+
+                settings = get_settings()
+                # Dedicated connection: no socket_timeout for blocking listen
+                sub_redis = aioredis.from_url(
+                    settings.redis.url,
+                    decode_responses=True,
+                    socket_timeout=None,
+                )
+                await sub_redis.ping()
+
+                pubsub = sub_redis.pubsub()
                 await pubsub.subscribe(_REDIS_CHANNEL)
                 logger.info("WebSocket Redis listener subscribed to %s", _REDIS_CHANNEL)
 
@@ -162,10 +174,16 @@ class ConnectionManager:
 
             except asyncio.CancelledError:
                 logger.info("Redis listener cancelled")
+                if sub_redis:
+                    await sub_redis.aclose()
                 return
             except Exception:
                 logger.warning("Redis listener error, reconnecting in 5s", exc_info=True)
-                self._redis = None
+                if sub_redis:
+                    try:
+                        await sub_redis.aclose()
+                    except Exception:
+                        pass
                 await asyncio.sleep(5)
 
     async def shutdown(self) -> None:
