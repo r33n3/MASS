@@ -4,10 +4,15 @@ Provides a conversational AI assistant for the dashboard.
 Routes chat messages to configurable LLM providers:
 Ollama (default), OpenAI, Anthropic, Gemini, Grok.
 
+Supports tool calling: the assistant can search, inspect findings,
+start scans, and query stats through MASS tools. Tool calling is
+enabled by default for providers that support it.
+
 The chat maintains conversation context via client-supplied history
 and adds a MASS-specific system prompt for security expertise.
 """
 
+import json
 import logging
 import os
 import time
@@ -45,6 +50,9 @@ MASS_SYSTEM_PROMPT = (
     "- Scan Profiles: quick (secrets + basic), standard (full static), comprehensive (static + dynamic)\n\n"
     "FINDING SEVERITIES: critical, high, medium, low, info\n"
     "FINDING STATUSES: open, confirmed, false_positive, accepted, fixed\n\n"
+    "You have access to tools that let you query the MASS database directly. "
+    "Use them to look up specific targets, scans, findings, and statistics "
+    "when answering questions. Prefer tools over guessing.\n\n"
     "When answering, be concise, technical, and actionable. Reference specific severity levels, "
     "categories, and compliance frameworks. Provide remediation guidance when discussing findings. "
     "If real-time environment context is provided below, cite specific numbers, names, and statuses."
@@ -58,7 +66,7 @@ class ChatMessage(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    role: str = Field(description="Message role: user, assistant, or system")
+    role: str = Field(description="Message role: user, assistant, system, or tool")
     content: str = Field(description="Message content")
 
 
@@ -98,6 +106,10 @@ class ChatRequest(BaseModel):
         le=2.0,
         description="Sampling temperature",
     )
+    enable_tools: bool = Field(
+        default=True,
+        description="Enable tool calling (search, findings, scans, stats). Requires model support.",
+    )
 
 
 class ChatResponse(BaseModel):
@@ -110,6 +122,10 @@ class ChatResponse(BaseModel):
     model: str = Field(description="Model that generated the response")
     latency_ms: float = Field(default=0.0, description="Response latency in ms")
     tokens_used: int = Field(default=0, description="Approximate tokens used")
+    tools_used: list[str] = Field(
+        default_factory=list,
+        description="Names of tools called during this response",
+    )
 
 
 class ChatProvidersResponse(BaseModel):
@@ -155,7 +171,7 @@ _PROVIDER_DEFAULTS: dict[str, dict[str, str]] = {
 }
 
 
-# ---- Provider dispatchers ----
+# ---- Provider dispatchers (text-only, original) ----
 
 async def _chat_ollama(
     messages: list[dict[str, str]],
@@ -309,7 +325,7 @@ async def _chat_gemini(
     return {"content": content, "tokens": tokens}
 
 
-# Provider dispatch table
+# Provider dispatch table (text-only, no tools)
 _PROVIDERS = {
     "ollama": _chat_ollama,
     "openai": _chat_openai_compatible,
@@ -317,6 +333,167 @@ _PROVIDERS = {
     "gemini": _chat_gemini,
     "grok": _chat_openai_compatible,  # Grok uses OpenAI-compatible API
 }
+
+
+# ---- Raw-response dispatchers (for tool calling loop) ----
+
+async def _raw_ollama(
+    messages: list[dict[str, Any]],
+    model: str,
+    endpoint: str,
+    temperature: float,
+    tools: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Send chat to Ollama and return raw response (for tool calling)."""
+    url = f"{endpoint.rstrip('/')}/api/chat"
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "stream": False,
+        "options": {"temperature": temperature},
+    }
+    if tools:
+        payload["tools"] = tools
+
+    async with httpx.AsyncClient(timeout=300.0) as client:
+        resp = await client.post(url, json=payload)
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def _raw_openai(
+    messages: list[dict[str, Any]],
+    model: str,
+    endpoint: str,
+    api_key: str,
+    temperature: float,
+    tools: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Send chat via OpenAI-compatible API and return raw response."""
+    url = f"{endpoint.rstrip('/')}/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+    }
+    if tools:
+        payload["tools"] = tools
+        payload["tool_choice"] = "auto"
+
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        resp = await client.post(url, json=payload, headers=headers)
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def _raw_anthropic(
+    messages: list[dict[str, Any]],
+    model: str,
+    endpoint: str,
+    api_key: str,
+    temperature: float,
+    tools: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Send chat via Anthropic Messages API and return raw response."""
+    url = f"{endpoint.rstrip('/')}/v1/messages"
+    headers = {
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01",
+        "Content-Type": "application/json",
+    }
+
+    # Separate system prompt from messages
+    system_text = ""
+    api_messages: list[dict[str, Any]] = []
+    for msg in messages:
+        if msg.get("role") == "system":
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                system_text += content + "\n"
+        else:
+            api_messages.append(msg)
+
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": api_messages,
+        "max_tokens": 4096,
+        "temperature": temperature,
+    }
+    if system_text.strip():
+        payload["system"] = system_text.strip()
+    if tools:
+        payload["tools"] = tools
+
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        resp = await client.post(url, json=payload, headers=headers)
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def _raw_gemini(
+    messages: list[dict[str, Any]],
+    model: str,
+    endpoint: str,
+    api_key: str,
+    temperature: float,
+    tools: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Send chat via Gemini API and return raw response."""
+    url = f"{endpoint.rstrip('/')}/models/{model}:generateContent?key={api_key}"
+
+    system_text = ""
+    contents: list[dict[str, Any]] = []
+    for msg in messages:
+        if msg.get("role") == "system":
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                system_text += content + "\n"
+        elif msg.get("role") == "user":
+            parts = msg.get("parts", [{"text": msg.get("content", "")}])
+            contents.append({"role": "user", "parts": parts})
+        elif msg.get("role") in ("assistant", "model"):
+            parts = msg.get("parts", [{"text": msg.get("content", "")}])
+            contents.append({"role": "model", "parts": parts})
+
+    payload: dict[str, Any] = {
+        "contents": contents,
+        "generationConfig": {"temperature": temperature},
+    }
+    if system_text.strip():
+        payload["systemInstruction"] = {"parts": [{"text": system_text.strip()}]}
+    if tools:
+        payload["tools"] = tools
+
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        resp = await client.post(url, json=payload)
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def _call_provider_raw(
+    provider: str,
+    messages: list[dict[str, Any]],
+    model: str,
+    endpoint: str,
+    api_key: str,
+    temperature: float,
+    tools: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Dispatch a raw (tool-enabled) chat call to the right provider."""
+    if provider == "ollama":
+        return await _raw_ollama(messages, model, endpoint, temperature, tools)
+    elif provider in ("openai", "grok"):
+        return await _raw_openai(messages, model, endpoint, api_key, temperature, tools)
+    elif provider == "anthropic":
+        return await _raw_anthropic(messages, model, endpoint, api_key, temperature, tools)
+    elif provider == "gemini":
+        return await _raw_gemini(messages, model, endpoint, api_key, temperature, tools)
+    else:
+        raise ValueError(f"No raw dispatcher for provider: {provider}")
 
 
 # ---- Endpoints ----
@@ -328,6 +505,8 @@ _PROVIDERS = {
     description=(
         "Sends a message to the configured LLM provider and returns the response. "
         "Supports Ollama (default), OpenAI, Anthropic, Gemini, and Grok. "
+        "When tools are enabled, the assistant can search, inspect findings, "
+        "start scans, and query stats. "
         "Conversation history is maintained client-side and passed with each request."
     ),
 )
@@ -360,6 +539,14 @@ async def chat(
     )
     system_prompt = request.system_prompt or MASS_SYSTEM_PROMPT
 
+    # Validate API key for providers that need one
+    if provider != "ollama" and not api_key:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"API key required for provider '{provider}'. "
+                   f"Set via request body or {defaults.get('key_env', 'env var')} env var.",
+        )
+
     # Gather database context (deployments, scans, findings)
     try:
         db_context = await gather_chat_context(db, tenant.tenant_id, request.message)
@@ -378,7 +565,7 @@ async def chat(
     full_system_prompt = system_prompt + db_context + docs_context
 
     # Build messages list
-    messages: list[dict[str, str]] = [{"role": "system", "content": full_system_prompt}]
+    messages: list[dict[str, Any]] = [{"role": "system", "content": full_system_prompt}]
     for msg in request.history:
         messages.append({"role": msg.role, "content": msg.content})
     messages.append({"role": "user", "content": request.message})
@@ -398,34 +585,44 @@ async def chat(
             raise
         except Exception as e:
             logger.warning("Ollama model readiness check failed: %s", e)
-            # Continue anyway — the model may already be loaded
 
-    # Dispatch to provider
-    handler = _PROVIDERS[provider]
     start = time.time()
 
     try:
-        if provider == "ollama":
-            result = await handler(
-                messages=messages,
-                model=model,
-                endpoint=endpoint,
-                temperature=request.temperature,
-            )
-        else:
-            if not api_key and provider != "ollama":
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"API key required for provider '{provider}'. "
-                           f"Set via request body or {defaults.get('key_env', 'env var')} env var.",
-                )
-            result = await handler(
+        # ---- Tool calling path ----
+        if request.enable_tools:
+            response_text, tokens, tools_used = await _chat_with_tools(
+                provider=provider,
                 messages=messages,
                 model=model,
                 endpoint=endpoint,
                 api_key=api_key,
                 temperature=request.temperature,
+                db=db,
+                tenant_id=tenant.tenant_id,
             )
+        else:
+            # ---- Original text-only path ----
+            handler = _PROVIDERS[provider]
+            if provider == "ollama":
+                result = await handler(
+                    messages=messages,
+                    model=model,
+                    endpoint=endpoint,
+                    temperature=request.temperature,
+                )
+            else:
+                result = await handler(
+                    messages=messages,
+                    model=model,
+                    endpoint=endpoint,
+                    api_key=api_key,
+                    temperature=request.temperature,
+                )
+            response_text = result.get("content", "")
+            tokens = result.get("tokens", 0)
+            tools_used = []
+
     except httpx.ConnectError:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -454,12 +651,102 @@ async def chat(
     latency_ms = (time.time() - start) * 1000
 
     return ChatResponse(
-        response=result.get("content", ""),
+        response=response_text,
         provider=provider,
         model=model,
         latency_ms=round(latency_ms, 1),
-        tokens_used=result.get("tokens", 0),
+        tokens_used=tokens,
+        tools_used=tools_used,
     )
+
+
+async def _chat_with_tools(
+    provider: str,
+    messages: list[dict[str, Any]],
+    model: str,
+    endpoint: str,
+    api_key: str,
+    temperature: float,
+    db: Any,
+    tenant_id: str,
+) -> tuple[str, int, list[str]]:
+    """Run the tool calling loop.
+
+    Returns (response_text, total_tokens, tools_used_names).
+    """
+    from mass.api.services.tool_executor import ToolExecutor
+    from mass.api.services.tool_formats import (
+        extract_text_content,
+        extract_token_count,
+        extract_tool_calls,
+        format_assistant_message,
+        format_tool_result_messages,
+        tools_for_provider,
+    )
+
+    # Get tool definitions for this provider
+    tool_defs = tools_for_provider(provider)
+    if not tool_defs:
+        # Provider doesn't support tools — fall back to text-only
+        handler = _PROVIDERS[provider]
+        if provider == "ollama":
+            result = await handler(messages=messages, model=model,
+                                   endpoint=endpoint, temperature=temperature)
+        else:
+            result = await handler(messages=messages, model=model,
+                                   endpoint=endpoint, api_key=api_key,
+                                   temperature=temperature)
+        return result.get("content", ""), result.get("tokens", 0), []
+
+    executor = ToolExecutor(db, tenant_id)
+    tools_used: list[str] = []
+    total_tokens = 0
+    max_rounds = 5
+
+    for round_num in range(max_rounds):
+        # Call provider with tools
+        raw_response = await _call_provider_raw(
+            provider, messages, model, endpoint, api_key, temperature, tool_defs,
+        )
+
+        total_tokens += extract_token_count(provider, raw_response)
+
+        # Check for tool calls
+        tool_calls = extract_tool_calls(provider, raw_response)
+        if not tool_calls:
+            # No tool calls — model is done, extract text
+            text = extract_text_content(provider, raw_response)
+            return text, total_tokens, tools_used
+
+        # Append the assistant message (including tool_calls) to history
+        assistant_msgs = format_assistant_message(provider, raw_response)
+        messages.extend(assistant_msgs)
+
+        # Execute each tool call and add results to messages
+        for tc in tool_calls:
+            tool_name = tc["name"]
+            tool_args = tc.get("arguments", {})
+            logger.info(
+                "Tool call: %s(%s)",
+                tool_name,
+                json.dumps(tool_args, default=str)[:200],
+            )
+
+            tool_result = await executor.execute(tool_name, tool_args)
+            tools_used.append(tool_name)
+
+            # Format and append tool result messages
+            result_msgs = format_tool_result_messages(provider, tc, tool_result)
+            messages.extend(result_msgs)
+
+    # Exhausted rounds — make one final call without tools to get a response
+    logger.info("Tool calling loop hit max rounds (%d), making final call", max_rounds)
+    raw_response = await _call_provider_raw(
+        provider, messages, model, endpoint, api_key, temperature, [],
+    )
+    total_tokens += extract_token_count(provider, raw_response)
+    text = extract_text_content(provider, raw_response)
+    return text, total_tokens, tools_used
 
 
 @router.get(

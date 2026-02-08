@@ -1489,6 +1489,40 @@
             transform: none;
         }
 
+        /* Tool toggle */
+        .tool-toggle {
+            display: flex;
+            align-items: center;
+            gap: 0.25rem;
+            cursor: pointer;
+            user-select: none;
+            padding-bottom: 0.75rem;
+        }
+        .tool-toggle input[type="checkbox"] {
+            accent-color: var(--toxic);
+            cursor: pointer;
+        }
+        .tool-toggle-label {
+            font-size: 0.6875rem;
+            font-family: var(--font-mono);
+            color: var(--text-muted);
+            letter-spacing: 0.02em;
+        }
+        .tool-toggle:has(input:checked) .tool-toggle-label {
+            color: var(--toxic);
+        }
+
+        /* Tool usage indicator */
+        .tool-indicator {
+            font-family: var(--font-mono);
+            font-size: 0.625rem;
+            color: var(--toxic);
+            padding: 0.25rem 0.5rem;
+            margin-bottom: 0.25rem;
+            border-left: 2px solid var(--toxic-dim);
+            opacity: 0.8;
+        }
+
         /* Typing indicator */
         .typing-indicator {
             display: flex;
@@ -4606,6 +4640,10 @@
                                 onkeydown="handleChatKeydown(event)"
                             ></textarea>
                         </div>
+                        <label class="tool-toggle" title="Enable MASS tools (search, findings, scans, stats)">
+                            <input type="checkbox" id="chatToolsEnabled" checked>
+                            <span class="tool-toggle-label">Tools</span>
+                        </label>
                         <button class="chat-send-btn" id="chatSendBtn" onclick="sendMessage()">
                             ➤
                         </button>
@@ -7300,14 +7338,21 @@
             sendMessage();
         }
 
-        function addChatMessage(content, type) {
+        function addChatMessage(content, type, toolsUsed) {
             const messagesEl = document.getElementById('chatMessages');
             const now = new Date();
             const time = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
+            let toolIndicator = '';
+            if (toolsUsed && toolsUsed.length > 0) {
+                const unique = [...new Set(toolsUsed)];
+                toolIndicator = `<div class="tool-indicator">Used: ${unique.join(', ')}</div>`;
+            }
+
             const messageEl = document.createElement('div');
             messageEl.className = `chat-message ${type}`;
             messageEl.innerHTML = `
+                ${toolIndicator}
                 <div class="message-content">${escapeHtml(content)}</div>
                 <div class="message-time">${time}</div>
             `;
@@ -7355,11 +7400,13 @@
             const chatConfig = getChatConfig();
 
             try {
+                const toolsEnabled = document.getElementById('chatToolsEnabled')?.checked ?? true;
                 const body = {
                     message: message,
                     history: chatHistory.slice(-20),
                     provider: chatConfig.provider,
                     temperature: chatConfig.temperature,
+                    enable_tools: toolsEnabled,
                 };
                 if (chatConfig.model) body.model = chatConfig.model;
                 if (chatConfig.apiKey) body.api_key = chatConfig.apiKey;
@@ -7373,13 +7420,15 @@
                 hideTypingIndicator();
 
                 const response = data.response || 'No response received.';
-                addChatMessage(response, 'bot');
+                const toolsUsed = data.tools_used || [];
+                addChatMessage(response, 'bot', toolsUsed);
                 chatHistory.push({ role: 'assistant', content: response });
 
                 // Update status with model info
                 const statusEl = document.querySelector('.chat-status span:last-child');
                 if (statusEl && data.model) {
-                    statusEl.textContent = `Online • ${data.provider}/${data.model} (${Math.round(data.latency_ms)}ms)`;
+                    const toolBadge = toolsUsed.length > 0 ? ` [${toolsUsed.length} tool calls]` : '';
+                    statusEl.textContent = `Online • ${data.provider}/${data.model} (${Math.round(data.latency_ms)}ms)${toolBadge}`;
                 }
 
             } catch (error) {
