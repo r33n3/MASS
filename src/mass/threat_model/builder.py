@@ -155,6 +155,328 @@ class ThreatModelBuilder:
         self._model.phases_completed.append(ThreatModelPhase.DISCOVERY.value)
 
     # ================================================================
+    # Phase 1b: Architecture Map (from AI code analysis)
+    # ================================================================
+
+    def ingest_architecture_map(
+        self, architecture_map: dict[str, Any]
+    ) -> None:
+        """Enrich threat model with AI-analyzed code architecture.
+
+        Generates threats from:
+        - Tool capabilities (command_execution → EXCESSIVE_AGENCY)
+        - Missing safety measures (no input validation → PROMPT_INJECTION)
+        - Model connections with tools enabled (tool injection surface)
+        - Unvalidated tools (TOOL_ABUSE)
+        """
+        self._model.last_updated_at = datetime.now(timezone.utc).isoformat()
+
+        # ── Tool capability threats ──
+        for tool in architecture_map.get("tool_definitions", []):
+            capabilities = tool.get("capabilities", [])
+            tool_name = tool.get("name", "unknown")
+            validation = tool.get("validation")
+
+            # High-risk capabilities
+            if "command_execution" in capabilities:
+                self._add_arch_threat(
+                    StrideAICategory.EXCESSIVE_AGENCY,
+                    f"Excessive Agency: Tool '{tool_name}' has command execution",
+                    f"Tool '{tool_name}' at {tool.get('location', '?')} can execute "
+                    f"system commands. If model input is not carefully validated, an "
+                    f"attacker could achieve arbitrary code execution via prompt injection.",
+                    severity="critical",
+                    likelihood=0.7,
+                    components=[tool_name],
+                )
+
+            if "file_system" in capabilities:
+                self._add_arch_threat(
+                    StrideAICategory.DATA_EXFILTRATION,
+                    f"Data Exfiltration: Tool '{tool_name}' has file system access",
+                    f"Tool '{tool_name}' can read/write the file system. An attacker "
+                    f"could exfiltrate sensitive data or plant malicious files.",
+                    severity="high",
+                    likelihood=0.6,
+                    components=[tool_name],
+                )
+
+            if "network" in capabilities:
+                self._add_arch_threat(
+                    StrideAICategory.DATA_EXFILTRATION,
+                    f"Data Exfiltration: Tool '{tool_name}' has network access",
+                    f"Tool '{tool_name}' can make network requests. An attacker could "
+                    f"exfiltrate data to external servers via crafted tool calls.",
+                    severity="high",
+                    likelihood=0.5,
+                    components=[tool_name],
+                )
+
+            if "database" in capabilities:
+                self._add_arch_threat(
+                    StrideAICategory.DATA_EXFILTRATION,
+                    f"Data Exfiltration: Tool '{tool_name}' has database access",
+                    f"Tool '{tool_name}' can query databases. An attacker could "
+                    f"extract sensitive records via prompt injection.",
+                    severity="high",
+                    likelihood=0.5,
+                    components=[tool_name],
+                )
+
+            # Missing validation on any tool
+            if not validation:
+                self._add_arch_threat(
+                    StrideAICategory.TOOL_ABUSE,
+                    f"Tool Abuse: '{tool_name}' lacks input validation",
+                    f"Tool '{tool_name}' has no detected input validation. "
+                    f"Unvalidated tool inputs enable injection attacks.",
+                    severity="medium",
+                    likelihood=0.6,
+                    components=[tool_name],
+                )
+
+        # ── Model connection threats ──
+        for mc in architecture_map.get("model_connections", []):
+            provider = mc.get("provider", "unknown")
+            model_name = mc.get("model_name", "")
+            has_tools = mc.get("has_tools", False)
+
+            if has_tools:
+                self._add_arch_threat(
+                    StrideAICategory.PROMPT_INJECTION,
+                    f"Prompt Injection: {provider} model with tools enabled",
+                    f"Model connection to {provider}"
+                    f"{(' (' + model_name + ')') if model_name else ''} "
+                    f"at {mc.get('call_location', '?')} has tool calling enabled. "
+                    f"Adversarial input could manipulate tool selection and parameters.",
+                    severity="high",
+                    likelihood=0.6,
+                    components=[model_name or provider],
+                )
+
+            if mc.get("system_prompt_source") == "inline":
+                self._add_arch_threat(
+                    StrideAICategory.SYSTEM_PROMPT_LEAKAGE,
+                    f"System Prompt Leakage: inline prompt in source code",
+                    f"System prompt for {provider} model is hardcoded inline "
+                    f"at {mc.get('call_location', '?')}. Inline prompts are more "
+                    f"susceptible to extraction via prompt injection.",
+                    severity="medium",
+                    likelihood=0.5,
+                    components=[model_name or provider],
+                )
+
+        # ── Missing safety measures ──
+        safety_types = {
+            sm.get("type") for sm in architecture_map.get("safety_measures", [])
+        }
+
+        if "input_validation" not in safety_types:
+            self._add_arch_threat(
+                StrideAICategory.PROMPT_INJECTION,
+                "Insufficient Guardrails: No input validation detected",
+                "No input validation or sanitization was found in the codebase. "
+                "User input flows directly to models without filtering, enabling "
+                "prompt injection attacks.",
+                severity="high",
+                likelihood=0.7,
+                components=[],
+            )
+
+        if "output_filtering" not in safety_types:
+            self._add_arch_threat(
+                StrideAICategory.DATA_EXFILTRATION,
+                "Insufficient Guardrails: No output filtering detected",
+                "No output filtering or content moderation was found. Model "
+                "responses are returned directly without checking for sensitive "
+                "data leakage or harmful content.",
+                severity="medium",
+                likelihood=0.5,
+                components=[],
+            )
+
+        if "rate_limiting" not in safety_types:
+            self._add_arch_threat(
+                StrideAICategory.RESOURCE_EXHAUSTION,
+                "Resource Exhaustion: No rate limiting detected",
+                "No rate limiting was found on model-facing endpoints. An "
+                "attacker could exhaust API quotas or compute resources.",
+                severity="medium",
+                likelihood=0.4,
+                components=[],
+            )
+
+        # ── Entry point threats ──
+        for ep in architecture_map.get("entry_points", []):
+            if not ep.get("authentication"):
+                self._add_arch_threat(
+                    StrideAICategory.IDENTITY_SPOOFING,
+                    f"Identity Spoofing: Unauthenticated {ep.get('type', 'endpoint')}",
+                    f"Entry point at {ep.get('location', '?')} accepts "
+                    f"{ep.get('accepts', 'input')} without authentication. "
+                    f"Any user can interact with the AI system.",
+                    severity="medium",
+                    likelihood=0.6,
+                    components=[ep.get("location", "")],
+                )
+
+        logger.info(
+            "Architecture map ingested: %d tools, %d models, %d safety measures → %d threats",
+            len(architecture_map.get("tool_definitions", [])),
+            len(architecture_map.get("model_connections", [])),
+            len(architecture_map.get("safety_measures", [])),
+            len(self._model.threats),
+        )
+
+    def ingest_questionnaire(
+        self, questionnaire: dict[str, Any]
+    ) -> None:
+        """Enrich threat model with user-provided risk context.
+
+        Adjusts threat severity based on deployment environment,
+        data sensitivity, and compliance requirements.
+        """
+        self._model.last_updated_at = datetime.now(timezone.utc).isoformat()
+
+        is_public = questionnaire.get("is_public_facing", False)
+        env = questionnaire.get("deployment_environment")
+        handles_pii = questionnaire.get("handles_pii", False)
+        has_payment = questionnaire.get("has_payment_data", False)
+        sensitivity = questionnaire.get("data_sensitivity")
+        frameworks = questionnaire.get("compliance_frameworks") or []
+
+        # ── Public-facing + production: elevate network attack threats ──
+        if is_public and env == "production":
+            for cat in (
+                StrideAICategory.IDENTITY_SPOOFING,
+                StrideAICategory.RESOURCE_EXHAUSTION,
+            ):
+                existing = self._existing_stride_threats.get(cat)
+                if existing:
+                    if SEVERITY_ORDER.get(existing.severity, 0) < SEVERITY_ORDER.get("high", 0):
+                        existing.severity = "high"
+                    existing.likelihood = min(existing.likelihood + 0.2, 1.0)
+                else:
+                    self._add_arch_threat(
+                        cat,
+                        f"Elevated Risk: Public-facing production system",
+                        f"This target is public-facing in production, increasing exposure "
+                        f"to {cat.value.replace('_', ' ')} attacks.",
+                        severity="high",
+                        likelihood=0.7,
+                        components=[],
+                    )
+
+        # ── PII handling: elevate data exfiltration / prompt leakage ──
+        if handles_pii:
+            for cat in (
+                StrideAICategory.DATA_EXFILTRATION,
+                StrideAICategory.SYSTEM_PROMPT_LEAKAGE,
+            ):
+                existing = self._existing_stride_threats.get(cat)
+                if existing:
+                    if SEVERITY_ORDER.get(existing.severity, 0) < SEVERITY_ORDER.get("high", 0):
+                        existing.severity = "high"
+                    existing.likelihood = min(existing.likelihood + 0.15, 1.0)
+                else:
+                    self._add_arch_threat(
+                        cat,
+                        f"PII Exposure: {cat.value.replace('_', ' ').title()} risk",
+                        f"This target handles PII. A {cat.value.replace('_', ' ')} "
+                        f"vulnerability could result in personal data breach with "
+                        f"regulatory notification requirements.",
+                        severity="high",
+                        likelihood=0.6,
+                        components=[],
+                    )
+
+        # ── Payment data: critical data exfiltration ──
+        if has_payment:
+            cat = StrideAICategory.DATA_EXFILTRATION
+            existing = self._existing_stride_threats.get(cat)
+            if existing:
+                existing.severity = "critical"
+                existing.likelihood = min(existing.likelihood + 0.2, 1.0)
+            else:
+                self._add_arch_threat(
+                    cat,
+                    "Critical Data: Payment data exfiltration risk",
+                    "This target processes payment data. Data exfiltration could "
+                    "result in financial fraud and PCI-DSS compliance violations.",
+                    severity="critical",
+                    likelihood=0.6,
+                    components=[],
+                )
+
+        # ── Regulated data: add compliance-aware threats ──
+        if sensitivity == "regulated" or (frameworks and "none" not in frameworks):
+            active_frameworks = [f for f in frameworks if f != "none"]
+            if not active_frameworks and sensitivity == "regulated":
+                active_frameworks = ["unspecified"]
+
+            if active_frameworks:
+                cat = StrideAICategory.AUDIT_TRAIL_GAPS
+                existing = self._existing_stride_threats.get(cat)
+                if existing:
+                    if SEVERITY_ORDER.get(existing.severity, 0) < SEVERITY_ORDER.get("high", 0):
+                        existing.severity = "high"
+                else:
+                    self._add_arch_threat(
+                        cat,
+                        f"Compliance: Audit trail requirements ({', '.join(active_frameworks)})",
+                        f"This target operates under {', '.join(f.upper() for f in active_frameworks)} "
+                        f"compliance. Insufficient audit logging of AI interactions could "
+                        f"violate regulatory requirements.",
+                        severity="high",
+                        likelihood=0.5,
+                        components=[],
+                    )
+
+        logger.info(
+            "Questionnaire ingested: public=%s env=%s pii=%s payment=%s -> %d threats",
+            is_public, env, handles_pii, has_payment,
+            len(self._model.threats),
+        )
+
+    def _add_arch_threat(
+        self,
+        stride_cat: StrideAICategory,
+        title: str,
+        description: str,
+        severity: str,
+        likelihood: float,
+        components: list[str],
+    ) -> None:
+        """Add or enrich a threat from architecture analysis."""
+        existing = self._existing_stride_threats.get(stride_cat)
+        if existing:
+            # Upgrade severity if worse
+            if SEVERITY_ORDER.get(severity, 0) > SEVERITY_ORDER.get(
+                existing.severity, 0
+            ):
+                existing.severity = severity
+            existing.likelihood = min(existing.likelihood + 0.1, 1.0)
+            for comp in components:
+                if comp and comp not in existing.affected_components:
+                    existing.affected_components.append(comp)
+            return
+
+        compliance = self._get_compliance_ids(stride_cat)
+        threat = self._create_threat(
+            stride_category=stride_cat,
+            title=title,
+            description=description,
+            severity=severity,
+            likelihood=likelihood,
+            impact=DEFAULT_THREAT_IMPACT.get(stride_cat, 0.5),
+            phase=ThreatModelPhase.DISCOVERY,
+            affected_components=[c for c in components if c],
+            compliance=compliance,
+        )
+        self._model.threats.append(threat)
+        self._existing_stride_threats[stride_cat] = threat
+
+    # ================================================================
     # Phase 2: Static Analysis Findings
     # ================================================================
 

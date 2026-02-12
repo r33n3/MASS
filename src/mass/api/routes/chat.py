@@ -53,6 +53,17 @@ MASS_SYSTEM_PROMPT = (
     "You have access to tools that let you query the MASS database directly. "
     "Use them to look up specific targets, scans, findings, and statistics "
     "when answering questions. Prefer tools over guessing.\n\n"
+    "You also have a lookup_model tool that searches HuggingFace for AI model information. "
+    "Use it when users ask about a model found in their project, mention a model name or "
+    "GGUF filename, or need to understand model capabilities and architecture. It handles "
+    "GGUF filenames (like 'model-Q4_K_M.gguf'), Ollama tags (like 'qwen3:8b'), and "
+    "HuggingFace IDs (like 'Qwen/Qwen2.5-VL-7B-Instruct'). It also cross-references "
+    "the model against scanned project architectures to show where it is used.\n\n"
+    "You also have a read_file tool that finds and reads files from scanned project directories. "
+    "Use it when users ask about a specific file (e.g. 'what does config.py do?'), want to see "
+    "file contents, or reference a filename from the project. It searches across all scanned "
+    "target directories and returns the file content. You can optionally specify a target_name "
+    "to narrow the search to a specific project.\n\n"
     "When answering, be concise, technical, and actionable. Reference specific severity levels, "
     "categories, and compliance frameworks. Provide remediation guidance when discussing findings. "
     "If real-time environment context is provided below, cite specific numbers, names, and statuses."
@@ -575,12 +586,14 @@ async def chat(
         try:
             from mass.api.services.ollama_manager import ensure_model_ready
 
-            ok, setup_msg = await ensure_model_ready(endpoint, model)
+            ok, setup_msg, resolved = await ensure_model_ready(endpoint, model)
             if not ok:
                 raise HTTPException(
                     status_code=status.HTTP_502_BAD_GATEWAY,
                     detail=f"Ollama model setup failed: {setup_msg}",
                 )
+            if resolved and resolved != model:
+                model = resolved
         except HTTPException:
             raise
         except Exception as e:

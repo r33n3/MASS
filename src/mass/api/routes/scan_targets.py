@@ -224,16 +224,34 @@ async def create_scan_target(
     if request.downstream_agents:
         meta_data["downstream_agents"] = request.downstream_agents
 
-    # Create deployment record
-    deployment = Deployment(
-        tenant_id=tenant.tenant_id,
-        name=request.name,
-        deployment_type=infer_deployment_type(request.target_type),
-        source_path=request.source_path,
-        meta=json.dumps(meta_data),
-    )
-    created_deployment = await deployment_repo.create(deployment)
-    await db.flush()
+    # Reuse existing deployment if same source_path or name already exists
+    existing = None
+    if request.source_path:
+        existing = await deployment_repo.find_by_source_path(
+            tenant.tenant_id, request.source_path
+        )
+    if not existing:
+        existing = await deployment_repo.find_by_name(
+            tenant.tenant_id, request.name
+        )
+
+    if existing:
+        created_deployment = existing
+        created_deployment.meta = json.dumps(meta_data)
+        if request.source_path:
+            created_deployment.source_path = request.source_path
+        await db.flush()
+        logger.info("Reusing deployment %s for target '%s'", existing.id, request.name)
+    else:
+        deployment = Deployment(
+            tenant_id=tenant.tenant_id,
+            name=request.name,
+            deployment_type=infer_deployment_type(request.target_type),
+            source_path=request.source_path,
+            meta=json.dumps(meta_data),
+        )
+        created_deployment = await deployment_repo.create(deployment)
+        await db.flush()
 
     # If auto_scan is disabled, just return the deployment
     if not request.auto_scan:

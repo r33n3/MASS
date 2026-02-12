@@ -6,7 +6,7 @@ Provides common dependencies for API routes.
 from datetime import datetime
 from typing import Annotated, AsyncGenerator
 
-from fastapi import Depends, Header, HTTPException, Request, status
+from fastapi import Depends, Header, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mass.core.config import MassSettings, get_settings
@@ -104,16 +104,26 @@ class CurrentTenant:
 async def get_api_key(
     x_api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,
     authorization: Annotated[str | None, Header()] = None,
-) -> str:
-    """Extract API key from headers.
+    api_key: Annotated[str | None, Query(alias="api_key")] = None,
+) -> str | None:
+    """Extract API key from headers or query parameter.
 
-    Supports both X-API-Key header and Bearer token.
+    Supports X-API-Key header, Bearer token, and ?api_key= query param
+    (for iframe/preview endpoints that cannot set headers).
+    In development mode, returns None if no key provided (handled by get_current_tenant).
     """
     if x_api_key:
         return x_api_key
 
     if authorization and authorization.startswith("Bearer "):
         return authorization[7:]
+
+    if api_key:
+        return api_key
+
+    settings = get_settings()
+    if settings.is_development:
+        return None
 
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -124,55 +134,57 @@ async def get_api_key(
 
 async def get_current_tenant(
     request: Request,
-    api_key: Annotated[str, Depends(get_api_key)],
+    api_key: Annotated[str | None, Depends(get_api_key)],
     api_key_repo: APIKeyRepo,
+    db: DBSession,
 ) -> CurrentTenant:
     """Get current tenant from API key.
 
-    Validates the API key and returns tenant context.
+    In development mode, falls back to the first tenant if key validation fails.
     """
-    # TODO: Implement proper API key validation with hashing
-    # For now, this is a stub that should be replaced with actual validation
-
     # Check cache first (request state may have cached tenant)
     if hasattr(request.state, "tenant"):
         return request.state.tenant
 
-    # Look up API key by prefix
-    key_prefix = api_key[:12] if len(api_key) >= 12 else api_key
-    stored_key = await api_key_repo.get_by_prefix(key_prefix)
+    settings = get_settings()
+    stored_key = None
 
-    if not stored_key:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid API key",
-        )
+    # Try API key lookup if a key was provided
+    if api_key:
+        key_prefix = api_key[:13] if api_key.startswith("mass_") else api_key[:8]
+        stored_key = await api_key_repo.get_by_prefix(key_prefix)
 
-    if not stored_key.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="API key is inactive",
-        )
+    if stored_key and stored_key.is_active:
+        if stored_key.expires_at and stored_key.expires_at < datetime.now():
+            if not settings.is_development:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="API key has expired",
+                )
+        else:
+            tenant = CurrentTenant(
+                tenant_id=stored_key.tenant_id,
+                api_key_id=stored_key.id,
+            )
+            request.state.tenant = tenant
+            return tenant
 
-    # Check if key is expired
-    if stored_key.expires_at and stored_key.expires_at < datetime.now():
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="API key has expired",
-        )
+    # In development mode, fall back to the first tenant
+    if settings.is_development:
+        from sqlalchemy import select
+        from mass.storage.models.tenant import Tenant
 
-    # Update usage count
-    await api_key_repo.increment_use_count(stored_key)
+        result = await db.execute(select(Tenant).limit(1))
+        fallback_tenant = result.scalar_one_or_none()
+        if fallback_tenant:
+            tenant = CurrentTenant(tenant_id=fallback_tenant.id)
+            request.state.tenant = tenant
+            return tenant
 
-    tenant = CurrentTenant(
-        tenant_id=stored_key.tenant_id,
-        api_key_id=stored_key.id,
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid API key",
     )
-
-    # Cache on request
-    request.state.tenant = tenant
-
-    return tenant
 
 
 CurrentTenantDep = Annotated[CurrentTenant, Depends(get_current_tenant)]

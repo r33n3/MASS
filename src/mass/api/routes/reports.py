@@ -16,6 +16,7 @@ from mass.api.dependencies import (
     ScanRepo,
     ReportRepo,
     FindingRepo,
+    DeploymentRepo,
     PaginationDep,
     SettingsDep,
 )
@@ -36,6 +37,148 @@ from mass.core.findings import Finding as CoreFinding
 from mass.core.types import AttackCategory, ComponentType, Severity
 
 router = APIRouter()
+
+_AI_SUMMARY_SYSTEM = (
+    "You are a concise security analyst. Given a project's architecture, "
+    "scan findings, and threat model data, write a short executive overview "
+    "(3-5 sentences) that describes: what the project/target does, its key "
+    "components and exposure surface, and the most significant security risks "
+    "found. Be direct, factual, and specific. Do not use markdown. "
+    "Do not include headers or bullet points — just flowing prose."
+)
+
+
+async def _generate_ai_project_summary(
+    scan,
+    deployment_repo,
+    findings: list[CoreFinding],
+    verdict: dict | None,
+    threat_model: dict | None,
+) -> str | None:
+    """Generate a short AI project overview from scan context.
+
+    Uses the same LLM provider/model that ran the scan. Falls back
+    gracefully — returns None if the LLM is unavailable.
+    """
+    import json as _json
+    import logging
+
+    log = logging.getLogger(__name__)
+
+    try:
+        deployment = await deployment_repo.get(scan.deployment_id)
+        if not deployment:
+            return None
+
+        deploy_meta = {}
+        if deployment.meta:
+            try:
+                deploy_meta = _json.loads(deployment.meta)
+            except (ValueError, TypeError):
+                pass
+
+        # Build compact context
+        parts = [f"Project: {deployment.name}"]
+        if deployment.description:
+            parts.append(f"Description: {deployment.description}")
+        if deployment.source_path:
+            parts.append(f"Source: {deployment.source_path}")
+
+        # Architecture map (compact)
+        arch = deploy_meta.get("architecture_map", {})
+        if arch:
+            entries = arch.get("entry_points", [])
+            if entries:
+                ep_summary = ", ".join(
+                    e.get("path", e.get("name", "?")) for e in entries[:8]
+                )
+                parts.append(f"Entry points: {ep_summary}")
+
+            models = arch.get("model_connections", [])
+            if models:
+                m_summary = ", ".join(
+                    f"{m.get('provider', '?')}/{m.get('model_name', '?')}"
+                    for m in models[:5]
+                )
+                parts.append(f"Models: {m_summary}")
+
+            tools = arch.get("tool_definitions", [])
+            if tools:
+                t_summary = ", ".join(t.get("name", "?") for t in tools[:8])
+                parts.append(f"Tools: {t_summary}")
+
+            safety = arch.get("safety_measures", {})
+            if safety:
+                measures = [
+                    k for k, v in safety.items()
+                    if v and k != "type"
+                ]
+                if measures:
+                    parts.append(f"Safety: {', '.join(measures[:5])}")
+
+        # Inline content snippet (system prompt, instructions)
+        inline = deploy_meta.get("inline_content", "")
+        if inline:
+            parts.append(f"System prompt/instructions (excerpt): {inline[:300]}")
+
+        # Findings summary
+        sev_counts = {}
+        for f in findings:
+            sev_counts[f.severity.value] = sev_counts.get(f.severity.value, 0) + 1
+        parts.append(
+            f"Findings: {len(findings)} total — "
+            + ", ".join(f"{k}: {v}" for k, v in sorted(sev_counts.items()))
+        )
+
+        # Top 5 finding titles
+        critical_high = [
+            f for f in findings
+            if f.severity in (Severity.CRITICAL, Severity.HIGH)
+        ][:5]
+        if critical_high:
+            parts.append(
+                "Top issues: " + "; ".join(f.title for f in critical_high)
+            )
+
+        # Verdict summary
+        if verdict:
+            parts.append(f"Risk level: {verdict.get('risk_level', 'unknown')}")
+            assessment = verdict.get("overall_assessment", "")
+            if assessment:
+                parts.append(f"Assessment: {assessment}")
+
+        # Threat model summary
+        if threat_model:
+            risk = threat_model.get("overall_risk_level", "unknown")
+            threats = threat_model.get("threats", [])
+            parts.append(f"Threat model: {risk} risk, {len(threats)} threats")
+
+        prompt = "\n".join(parts)
+
+        # Create runner — use same provider/model as the scan
+        from mass.runners.factory import create_runner
+
+        provider = deploy_meta.get("model_provider", "ollama")
+        model = deploy_meta.get("model_name")
+        runner = create_runner(provider, model=model)
+        if not runner:
+            log.debug("AI summary: could not create runner for %s/%s", provider, model)
+            return None
+
+        result = await runner.run_async(
+            prompt=prompt,
+            system_prompt=_AI_SUMMARY_SYSTEM,
+        )
+
+        if result.is_success and result.response:
+            return result.response.strip()
+
+        log.debug("AI summary: LLM returned error: %s", result.error)
+        return None
+
+    except Exception as e:
+        log.debug("AI summary generation failed (non-fatal): %s", e)
+        return None
 
 
 def _report_to_response(report: Report) -> ReportResponse:
@@ -146,6 +289,7 @@ async def generate_report(
     scan_repo: ScanRepo,
     report_repo: ReportRepo,
     finding_repo: FindingRepo,
+    deployment_repo: DeploymentRepo,
     settings: SettingsDep,
 ) -> ReportResponse:
     """Generate a new report from scan results."""
@@ -200,6 +344,13 @@ async def generate_report(
             except (ValueError, TypeError):
                 pass
 
+    # Generate AI project overview for executive reports
+    ai_summary = None
+    if request.include_ai_summary and request.report_type == "executive":
+        ai_summary = await _generate_ai_project_summary(
+            scan, deployment_repo, core_findings, verdict_data, threat_model_data,
+        )
+
     # Generate the report content (pure computation, no DB)
     try:
         config = ReportConfig(
@@ -215,6 +366,8 @@ async def generate_report(
             metadata={"scan_id": scan.id, "profile": scan.profile},
             verdict=verdict_data,
             threat_model=threat_model_data,
+            report_type=request.report_type,
+            ai_summary=ai_summary,
         )
 
         # Save to data directory
@@ -364,6 +517,80 @@ async def download_report(
         media_type=content_type,
         headers={
             "Content-Disposition": f'attachment; filename="{file_path.name}"',
+            "Content-Length": str(len(content)),
+        },
+    )
+
+
+@router.get(
+    "/{report_id}/preview",
+    summary="Preview report",
+    description="Render report inline for iframe preview (no download header).",
+)
+async def preview_report(
+    report_id: str,
+    tenant: CurrentTenantDep,
+    report_repo: ReportRepo,
+) -> Response:
+    """Render a report inline for iframe preview."""
+    report = await report_repo.get(report_id)
+
+    if not report or report.tenant_id != tenant.tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Report not found",
+        )
+
+    if report.status != "completed":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Report is not yet completed",
+        )
+
+    if not report.file_path:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Report file not found",
+        )
+
+    file_path = Path(report.file_path)
+    if not file_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Report file not found on disk",
+        )
+
+    content_types = {
+        "sarif": "application/json",
+        "json": "application/json",
+        "html": "text/html",
+        "pdf": "application/pdf",
+        "markdown": "text/plain",
+    }
+    content_type = content_types.get(report.format, "text/plain")
+
+    content = file_path.read_bytes()
+
+    # For non-HTML formats, wrap in a styled pre block matching MASS theme
+    if report.format not in ("html", "pdf"):
+        text = content.decode("utf-8", errors="replace")
+        from html import escape as html_escape
+        content = (
+            '<!DOCTYPE html><html><head><meta charset="UTF-8">'
+            '<style>'
+            'body{background:#0a0b09;color:#e8e4dc;font-family:"IBM Plex Mono",Consolas,monospace;'
+            'font-size:0.8125rem;line-height:1.6;margin:0;padding:1.5rem;}'
+            'pre{white-space:pre-wrap;word-break:break-word;}'
+            '</style></head><body><pre>'
+            + html_escape(text)
+            + '</pre></body></html>'
+        ).encode("utf-8")
+        content_type = "text/html"
+
+    return Response(
+        content=content,
+        media_type=content_type,
+        headers={
             "Content-Length": str(len(content)),
         },
     )

@@ -84,6 +84,7 @@ services:
     environment:
       PYTHONPATH: /app/src
       MASS_DB_URL: postgresql+asyncpg://mass:mass@postgres:5432/mass
+      MASS_DATABASE__URL: postgresql+asyncpg://mass:mass@postgres:5432/mass
       MASS_REDIS_URL: redis://redis:6379/0
       MASS_DB_POOL_SIZE: "15"
       MASS_DB_MAX_OVERFLOW: "30"
@@ -103,9 +104,9 @@ services:
       - ./tests:/app/tests
       - ./data:/app/data
       - ./scripts:/app/scripts
-      - C:/Users/bradj/Development/aDiOS:/app/targets/aDiOS:ro
-      - C:/Users/bradj/Development/BenderBox:/app/targets/BenderBox:ro
-      - github_clones:/app/targets/_github_clones
+      - ${MASS_TARGETS_DIR:-./targets}:/app/targets:ro
+      - github_clones:/app/github_clones
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       postgres:
         condition: service_healthy
@@ -147,6 +148,7 @@ services:
     environment:
       PYTHONPATH: /app/src
       MASS_DB_URL: postgresql+asyncpg://mass:mass@postgres:5432/mass
+      MASS_DATABASE__URL: postgresql+asyncpg://mass:mass@postgres:5432/mass
       MASS_REDIS_URL: redis://redis:6379/0
       MASS_WORKER_CONCURRENCY: "5"
       MASS_WORKER_QUEUES: "scans"
@@ -157,9 +159,8 @@ services:
     volumes:
       - ./src:/app/src
       - ./data:/app/data
-      - C:/Users/bradj/Development/aDiOS:/app/targets/aDiOS:ro
-      - C:/Users/bradj/Development/BenderBox:/app/targets/BenderBox:ro
-      - github_clones:/app/targets/_github_clones
+      - ${MASS_TARGETS_DIR:-./targets}:/app/targets:ro
+      - github_clones:/app/github_clones
     depends_on:
       postgres:
         condition: service_healthy
@@ -185,6 +186,7 @@ services:
       - "11434:11434"
     volumes:
       - ollama_data:/root/.ollama
+      - ${MASS_TARGETS_DIR:-./targets}:/app/targets:ro
     networks:
       - mass-network
     restart: unless-stopped

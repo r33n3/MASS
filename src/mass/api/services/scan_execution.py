@@ -165,6 +165,7 @@ class ScanExecutionService:
                         target_files=target_files,
                         inline_content=inline_content,
                         agent_meta=agent_meta,
+                        architecture_map=deploy_meta.get("architecture_map"),
                     ),
                 )
 
@@ -235,6 +236,16 @@ class ScanExecutionService:
                             attack_surface=None,
                             deployment_posture=posture,
                         )
+
+                        # Phase 1b: Architecture map (if profiled)
+                        arch_map = deploy_meta.get("architecture_map")
+                        if arch_map:
+                            tm_builder.ingest_architecture_map(arch_map)
+
+                        # Phase 1c: Risk questionnaire (if filled)
+                        risk_q = deploy_meta.get("risk_questionnaire")
+                        if risk_q:
+                            tm_builder.ingest_questionnaire(risk_q)
 
                         # Phase 2: Static findings
                         tm_builder.ingest_findings(serialized_findings)

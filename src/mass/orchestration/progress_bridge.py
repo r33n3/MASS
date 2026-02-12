@@ -17,6 +17,37 @@ from mass.orchestration.service import ScanProgress
 
 logger = logging.getLogger(__name__)
 
+# Code snippet context lines
+_SNIPPET_CONTEXT = 3
+
+
+def _extract_code_snippet(file_path: str | None, line_number: int | None) -> str | None:
+    """Extract a code snippet from a file around a given line number."""
+    if not file_path or not line_number:
+        return None
+    try:
+        import os
+        if not os.path.isfile(file_path):
+            return None
+        # Don't read huge files
+        if os.path.getsize(file_path) > 2 * 1024 * 1024:
+            return None
+        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+            all_lines = f.readlines()
+        if not all_lines:
+            return None
+        idx = min(line_number - 1, len(all_lines) - 1)
+        start = max(0, idx - _SNIPPET_CONTEXT)
+        end = min(len(all_lines), idx + _SNIPPET_CONTEXT + 1)
+        snippet_lines = []
+        for i in range(start, end):
+            marker = ">>>" if i == idx else "   "
+            snippet_lines.append(f"{marker} {i + 1:4d} | {all_lines[i].rstrip()}")
+        return "\n".join(snippet_lines)
+    except Exception:
+        return None
+
+
 # Minimum progress change (%) before persisting to DB
 PROGRESS_THROTTLE_PERCENT = 5.0
 
@@ -158,6 +189,9 @@ class ProgressBridge:
                 component_name=finding.component_name,
             )
 
+            # Extract code snippet from source file if available
+            snippet = _extract_code_snippet(finding.file_path, finding.line_number)
+
             db_finding = DBFinding(
                 scan_id=self._scan_id,
                 tenant_id=self._tenant_id,
@@ -167,6 +201,7 @@ class ProgressBridge:
                 category=finding.category.value,
                 file_path=finding.file_path,
                 line_number=finding.line_number,
+                code_snippet=snippet,
                 cwe_id=finding.cwe_ids[0] if finding.cwe_ids else None,
                 owasp_category=finding.owasp_ids[0] if finding.owasp_ids else None,
                 mitre_technique=finding.mitre_ids[0] if finding.mitre_ids else None,

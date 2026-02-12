@@ -102,6 +102,10 @@ dump.rdb
 *.log
 logs/
 
+# ---------- Scan Targets ----------
+targets/*
+!targets/.gitkeep
+
 # ---------- AI Model Files ----------
 *.gguf
 *.bin

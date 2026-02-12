@@ -85,6 +85,9 @@ class InterrogationConfig:
     # Temperature for attacker model (higher = more creative)
     attacker_temperature: float = 0.8
 
+    # MCP tool integration
+    mcp_servers: list[dict] | None = None
+
 
 @dataclass
 class InterrogationResult:
@@ -109,8 +112,13 @@ class InterrogationOrchestrator:
     runs conversations, and converts results to findings.
     """
 
-    def __init__(self, config: InterrogationConfig) -> None:
+    def __init__(
+        self,
+        config: InterrogationConfig,
+        turn_callback: Any | None = None,
+    ) -> None:
         self.config = config
+        self.turn_callback = turn_callback
         self.attacker: BaseRunner | None = None
         self.target: BaseRunner | None = None
 
@@ -202,12 +210,70 @@ class InterrogationOrchestrator:
         # Default: all registered agents
         return agent_registry.list_all()
 
+    async def _setup_mcp_tools(self) -> tuple[Any, list[dict] | None]:
+        """Connect to MCP servers and discover tools.
+
+        Returns:
+            (mcp_client, tool_definitions) or (None, None) if no MCP servers.
+        """
+        if not self.config.mcp_servers:
+            return None, None
+
+        from mass.mcp.client import MCPClient
+
+        # Connect to first MCP server (multi-server aggregation is a future enhancement)
+        server = self.config.mcp_servers[0]
+        transport = server.get("transport", "stdio")
+
+        try:
+            if transport == "stdio":
+                client = MCPClient.stdio(
+                    command=server.get("command", ""),
+                    args=server.get("args", []),
+                )
+            elif transport in ("http", "sse"):
+                url = server.get("url", "")
+                if transport == "sse":
+                    client = MCPClient.sse(sse_url=url)
+                else:
+                    client = MCPClient.http(base_url=url)
+            else:
+                logger.warning("Unsupported MCP transport: %s", transport)
+                return None, None
+
+            await client.connect()
+            tools = await client.list_tools()
+
+            # Convert MCPTool to OpenAI-format tool definitions
+            tool_defs = []
+            for tool in tools:
+                tool_defs.append({
+                    "type": "function",
+                    "function": {
+                        "name": tool.name,
+                        "description": tool.description or "",
+                        "parameters": tool.input_schema or {"type": "object", "properties": {}},
+                    },
+                })
+
+            logger.info(
+                "Discovered %d MCP tools from %s",
+                len(tool_defs), server.get("name", "unknown"),
+            )
+            return client, tool_defs
+
+        except Exception as e:
+            logger.error("Failed to setup MCP tools: %s", e)
+            return None, None
+
     def execute(self) -> InterrogationResult:
         """Execute the full interrogation.
 
         Returns:
             InterrogationResult with findings and conversation transcripts.
         """
+        import asyncio
+
         start = time.time()
         job_id = str(uuid4())
 
@@ -224,6 +290,17 @@ class InterrogationOrchestrator:
         result.attacker_model = self.attacker.model
         result.target_model = self.target.model
 
+        # Setup MCP tools if configured
+        mcp_client = None
+        tool_defs = None
+        if self.config.mcp_servers:
+            try:
+                loop = asyncio.new_event_loop()
+                mcp_client, tool_defs = loop.run_until_complete(self._setup_mcp_tools())
+                loop.close()
+            except Exception as e:
+                logger.warning("MCP setup failed, continuing without tools: %s", e)
+
         # Select agents
         agents = self._select_agents()
         if not agents:
@@ -232,59 +309,75 @@ class InterrogationOrchestrator:
             return result
 
         logger.info(
-            "Starting interrogation: %d agents, attacker=%s/%s, target=%s/%s",
+            "Starting interrogation: %d agents, attacker=%s/%s, target=%s/%s%s",
             len(agents),
             self.config.attacker_provider, self.attacker.model,
             self.config.target_provider, self.target.model,
+            f", {len(tool_defs)} MCP tools" if tool_defs else "",
         )
 
         # Run each agent's strategies
-        for agent in agents:
-            result.agents_run += 1
-            strategies = agent.strategies
+        try:
+            for agent in agents:
+                result.agents_run += 1
+                strategies = agent.strategies
 
-            if self.config.max_strategies_per_agent > 0:
-                strategies = strategies[:self.config.max_strategies_per_agent]
+                if self.config.max_strategies_per_agent > 0:
+                    strategies = strategies[:self.config.max_strategies_per_agent]
 
-            for strategy in strategies:
-                result.strategies_run += 1
-                conv_id = f"{job_id}:{agent.name}:{strategy.name}"
+                for strategy in strategies:
+                    result.strategies_run += 1
+                    conv_id = f"{job_id}:{agent.name}:{strategy.name}"
 
-                logger.info(
-                    "Running %s/%s (%s) — max %d turns",
-                    agent.name, strategy.name, agent.category.value,
-                    strategy.max_turns,
-                )
+                    logger.info(
+                        "Running %s/%s (%s) — max %d turns",
+                        agent.name, strategy.name, agent.category.value,
+                        strategy.max_turns,
+                    )
 
+                    try:
+                        conv_manager = ConversationManager(
+                            attacker=self.attacker,
+                            target=self.target,
+                            max_turns=min(strategy.max_turns, self.config.max_turns),
+                            target_system_prompt=self.config.target_system_prompt,
+                            mcp_client=mcp_client,
+                            tool_definitions=tool_defs,
+                            turn_callback=self.turn_callback,
+                        )
+
+                        conv_result = conv_manager.run_conversation(
+                            attacker_system_prompt=strategy.system_prompt,
+                            opening_prompt=strategy.opening_prompt,
+                            conversation_id=conv_id,
+                            category=agent.category.value,
+                            strategy=strategy.name,
+                        )
+
+                        conv_result.success_indicators = strategy.success_indicators
+                        conv_result.strategy_description = strategy.description
+                        result.conversations.append(conv_result)
+
+                        if conv_result.success:
+                            result.successful_attacks += 1
+                            finding = self._create_finding(agent, strategy, conv_result)
+                            result.findings.append(finding)
+                        else:
+                            result.failed_attacks += 1
+
+                    except Exception as e:
+                        error_msg = f"Strategy {agent.name}/{strategy.name} failed: {e}"
+                        logger.error(error_msg, exc_info=True)
+                        result.errors.append(error_msg)
+        finally:
+            # Clean up MCP client
+            if mcp_client:
                 try:
-                    conv_manager = ConversationManager(
-                        attacker=self.attacker,
-                        target=self.target,
-                        max_turns=min(strategy.max_turns, self.config.max_turns),
-                        target_system_prompt=self.config.target_system_prompt,
-                    )
-
-                    conv_result = conv_manager.run_conversation(
-                        attacker_system_prompt=strategy.system_prompt,
-                        opening_prompt=strategy.opening_prompt,
-                        conversation_id=conv_id,
-                        category=agent.category.value,
-                        strategy=strategy.name,
-                    )
-
-                    result.conversations.append(conv_result)
-
-                    if conv_result.success:
-                        result.successful_attacks += 1
-                        finding = self._create_finding(agent, strategy, conv_result)
-                        result.findings.append(finding)
-                    else:
-                        result.failed_attacks += 1
-
-                except Exception as e:
-                    error_msg = f"Strategy {agent.name}/{strategy.name} failed: {e}"
-                    logger.error(error_msg, exc_info=True)
-                    result.errors.append(error_msg)
+                    loop = asyncio.new_event_loop()
+                    loop.run_until_complete(mcp_client.disconnect())
+                    loop.close()
+                except Exception:
+                    logger.debug("MCP client disconnect failed", exc_info=True)
 
         result.duration_seconds = time.time() - start
         logger.info(

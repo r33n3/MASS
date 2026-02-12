@@ -1,13 +1,13 @@
 """Anthropic API runner.
 
-Runner for Anthropic's Claude API.
+Runner for Anthropic's Claude API with tool-calling support.
 """
 
 import os
 import time
 from typing import Any
 
-from mass.runners.base import BaseRunner, RunnerResult, RunnerStatus, register_runner
+from mass.runners.base import BaseRunner, RunnerResult, RunnerStatus, ToolCall, register_runner
 
 
 @register_runner
@@ -15,6 +15,7 @@ class AnthropicRunner(BaseRunner):
     """Anthropic API runner.
 
     Executes prompts against Anthropic's Claude API.
+    Supports tool/function calling via Anthropic's native tools parameter.
     """
 
     name = "anthropic"
@@ -73,6 +74,35 @@ class AnthropicRunner(BaseRunner):
 
         return self._client
 
+    @staticmethod
+    def _convert_tools_to_anthropic(tools: list[dict]) -> list[dict]:
+        """Convert OpenAI-format tool definitions to Anthropic format."""
+        anthropic_tools = []
+        for t in tools:
+            fn = t.get("function", t)
+            anthropic_tools.append({
+                "name": fn.get("name", ""),
+                "description": fn.get("description", ""),
+                "input_schema": fn.get("parameters", {"type": "object", "properties": {}}),
+            })
+        return anthropic_tools
+
+    @staticmethod
+    def _parse_response_blocks(response: Any) -> tuple[str, list[ToolCall]]:
+        """Parse text content and tool_use blocks from Anthropic response."""
+        text_parts = []
+        tool_calls = []
+        for block in response.content:
+            if hasattr(block, "text"):
+                text_parts.append(block.text)
+            elif hasattr(block, "type") and block.type == "tool_use":
+                tool_calls.append(ToolCall(
+                    id=block.id,
+                    name=block.name,
+                    arguments=block.input if isinstance(block.input, dict) else {},
+                ))
+        return "\n".join(text_parts) if text_parts else "", tool_calls
+
     def run(
         self,
         prompt: str,
@@ -84,7 +114,7 @@ class AnthropicRunner(BaseRunner):
         Args:
             prompt: The user prompt to send.
             system_prompt: Optional system prompt.
-            **kwargs: Additional parameters.
+            **kwargs: Additional parameters (tools, messages).
 
         Returns:
             RunnerResult with response and metadata.
@@ -94,10 +124,17 @@ class AnthropicRunner(BaseRunner):
         try:
             client = self._get_client()
 
+            # Support full message history override
+            messages_override = kwargs.get("messages")
+            if messages_override:
+                messages = list(messages_override)
+            else:
+                messages = [{"role": "user", "content": prompt}] if prompt else []
+
             message_kwargs: dict[str, Any] = {
                 "model": kwargs.get("model", self.model),
                 "max_tokens": kwargs.get("max_tokens", self.max_tokens),
-                "messages": [{"role": "user", "content": prompt}],
+                "messages": messages,
             }
 
             if system_prompt:
@@ -106,15 +143,15 @@ class AnthropicRunner(BaseRunner):
             if "temperature" in kwargs or self.temperature != 1.0:
                 message_kwargs["temperature"] = kwargs.get("temperature", self.temperature)
 
+            tools = kwargs.get("tools")
+            if tools:
+                message_kwargs["tools"] = self._convert_tools_to_anthropic(tools)
+
             response = client.messages.create(**message_kwargs)
 
             latency_ms = (time.time() - start_time) * 1000
 
-            # Extract text from response
-            content = ""
-            for block in response.content:
-                if hasattr(block, "text"):
-                    content += block.text
+            content, tool_calls = self._parse_response_blocks(response)
 
             tokens_used = (
                 response.usage.input_tokens + response.usage.output_tokens
@@ -130,6 +167,7 @@ class AnthropicRunner(BaseRunner):
                     "stop_reason": response.stop_reason,
                     "model": response.model,
                 },
+                tool_calls=tool_calls,
             )
 
         except Exception as e:
@@ -161,7 +199,7 @@ class AnthropicRunner(BaseRunner):
         Args:
             prompt: The user prompt to send.
             system_prompt: Optional system prompt.
-            **kwargs: Additional parameters.
+            **kwargs: Additional parameters (tools, messages).
 
         Returns:
             RunnerResult with response and metadata.
@@ -179,10 +217,16 @@ class AnthropicRunner(BaseRunner):
 
             client = AsyncAnthropic(**client_kwargs)
 
+            messages_override = kwargs.get("messages")
+            if messages_override:
+                messages = list(messages_override)
+            else:
+                messages = [{"role": "user", "content": prompt}] if prompt else []
+
             message_kwargs: dict[str, Any] = {
                 "model": kwargs.get("model", self.model),
                 "max_tokens": kwargs.get("max_tokens", self.max_tokens),
-                "messages": [{"role": "user", "content": prompt}],
+                "messages": messages,
             }
 
             if system_prompt:
@@ -191,14 +235,15 @@ class AnthropicRunner(BaseRunner):
             if "temperature" in kwargs or self.temperature != 1.0:
                 message_kwargs["temperature"] = kwargs.get("temperature", self.temperature)
 
+            tools = kwargs.get("tools")
+            if tools:
+                message_kwargs["tools"] = self._convert_tools_to_anthropic(tools)
+
             response = await client.messages.create(**message_kwargs)
 
             latency_ms = (time.time() - start_time) * 1000
 
-            content = ""
-            for block in response.content:
-                if hasattr(block, "text"):
-                    content += block.text
+            content, tool_calls = self._parse_response_blocks(response)
 
             tokens_used = (
                 response.usage.input_tokens + response.usage.output_tokens
@@ -214,6 +259,7 @@ class AnthropicRunner(BaseRunner):
                     "stop_reason": response.stop_reason,
                     "model": response.model,
                 },
+                tool_calls=tool_calls,
             )
 
         except ImportError:

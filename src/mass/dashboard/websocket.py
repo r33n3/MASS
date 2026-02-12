@@ -387,3 +387,30 @@ async def broadcast_interrogation_update(
         "duration_seconds": duration_seconds,
         "timestamp": datetime.utcnow().isoformat(),
     })
+
+
+async def broadcast_interrogation_turn(
+    job_id: str,
+    turn_number: int,
+    role: str,
+    content: str,
+    strategy: str = "",
+    category: str = "",
+    model: str = "",
+    latency_ms: float = 0.0,
+    conversation_id: str = "",
+) -> None:
+    """Broadcast a single interrogation conversation turn to all connected clients."""
+    await manager.broadcast({
+        "type": "interrogation_turn",
+        "job_id": job_id,
+        "turn_number": turn_number,
+        "role": role,
+        "content": content[:3000],
+        "strategy": strategy,
+        "category": category,
+        "model": model,
+        "latency_ms": latency_ms,
+        "conversation_id": conversation_id,
+        "timestamp": datetime.utcnow().isoformat(),
+    })

@@ -22,6 +22,14 @@ class RunnerStatus(str, Enum):
 
 
 @dataclass
+class ToolCall:
+    """A tool/function call requested by the model."""
+    id: str                           # Provider's call ID
+    name: str                         # Tool/function name
+    arguments: dict[str, Any]         # Parsed arguments
+
+
+@dataclass
 class RunnerResult:
     """Result of running a prompt through a model."""
     response: str
@@ -32,6 +40,7 @@ class RunnerResult:
     tokens_used: int = 0
     metadata: dict[str, Any] = field(default_factory=dict)
     error: str | None = None
+    tool_calls: list[ToolCall] = field(default_factory=list)
 
     @property
     def is_success(self) -> bool:
@@ -167,6 +176,7 @@ class BaseRunner(ABC):
         tokens_used: int = 0,
         metadata: dict[str, Any] | None = None,
         error: str | None = None,
+        tool_calls: list[ToolCall] | None = None,
     ) -> RunnerResult:
         """Helper to create a RunnerResult.
 
@@ -177,6 +187,7 @@ class BaseRunner(ABC):
             tokens_used: Tokens consumed.
             metadata: Additional metadata.
             error: Error message if any.
+            tool_calls: Tool/function calls from the model.
 
         Returns:
             RunnerResult instance.
@@ -190,6 +201,7 @@ class BaseRunner(ABC):
             tokens_used=tokens_used,
             metadata=metadata or {},
             error=error,
+            tool_calls=tool_calls or [],
         )
 
 

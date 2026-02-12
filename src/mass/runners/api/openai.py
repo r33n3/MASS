@@ -1,13 +1,14 @@
 """OpenAI API runner.
 
-Runner for OpenAI's chat completion API.
+Runner for OpenAI's chat completion API with tool-calling support.
 """
 
+import json
 import os
 import time
 from typing import Any
 
-from mass.runners.base import BaseRunner, RunnerResult, RunnerStatus, register_runner
+from mass.runners.base import BaseRunner, RunnerResult, RunnerStatus, ToolCall, register_runner
 
 
 @register_runner
@@ -15,6 +16,7 @@ class OpenAIRunner(BaseRunner):
     """OpenAI API runner.
 
     Executes prompts against OpenAI's chat completion API.
+    Supports tool/function calling via OpenAI's native tools parameter.
     """
 
     name = "openai"
@@ -73,6 +75,23 @@ class OpenAIRunner(BaseRunner):
 
         return self._client
 
+    @staticmethod
+    def _parse_tool_calls(message: Any) -> list[ToolCall]:
+        """Parse tool_calls from an OpenAI response message."""
+        calls = []
+        if hasattr(message, "tool_calls") and message.tool_calls:
+            for tc in message.tool_calls:
+                try:
+                    args = json.loads(tc.function.arguments) if tc.function.arguments else {}
+                except (json.JSONDecodeError, TypeError):
+                    args = {}
+                calls.append(ToolCall(
+                    id=tc.id or "",
+                    name=tc.function.name or "",
+                    arguments=args,
+                ))
+        return calls
+
     def run(
         self,
         prompt: str,
@@ -84,7 +103,7 @@ class OpenAIRunner(BaseRunner):
         Args:
             prompt: The user prompt to send.
             system_prompt: Optional system prompt.
-            **kwargs: Additional parameters.
+            **kwargs: Additional parameters (tools, messages).
 
         Returns:
             RunnerResult with response and metadata.
@@ -94,21 +113,35 @@ class OpenAIRunner(BaseRunner):
         try:
             client = self._get_client()
 
-            messages = []
-            if system_prompt:
-                messages.append({"role": "system", "content": system_prompt})
-            messages.append({"role": "user", "content": prompt})
+            # Support full message history override
+            messages_override = kwargs.get("messages")
+            if messages_override:
+                messages = list(messages_override)
+            else:
+                messages = []
+                if system_prompt:
+                    messages.append({"role": "system", "content": system_prompt})
+                if prompt:
+                    messages.append({"role": "user", "content": prompt})
 
-            response = client.chat.completions.create(
-                model=kwargs.get("model", self.model),
-                messages=messages,
-                temperature=kwargs.get("temperature", self.temperature),
-                max_tokens=kwargs.get("max_tokens", self.max_tokens),
-            )
+            api_kwargs: dict[str, Any] = {
+                "model": kwargs.get("model", self.model),
+                "messages": messages,
+                "temperature": kwargs.get("temperature", self.temperature),
+                "max_tokens": kwargs.get("max_tokens", self.max_tokens),
+            }
+
+            tools = kwargs.get("tools")
+            if tools:
+                api_kwargs["tools"] = tools
+
+            response = client.chat.completions.create(**api_kwargs)
 
             latency_ms = (time.time() - start_time) * 1000
 
-            content = response.choices[0].message.content or ""
+            message = response.choices[0].message
+            content = message.content or ""
+            tool_calls = self._parse_tool_calls(message)
             tokens_used = response.usage.total_tokens if response.usage else 0
 
             return self._create_result(
@@ -120,6 +153,7 @@ class OpenAIRunner(BaseRunner):
                     "finish_reason": response.choices[0].finish_reason,
                     "model": response.model,
                 },
+                tool_calls=tool_calls,
             )
 
         except Exception as e:
@@ -151,7 +185,7 @@ class OpenAIRunner(BaseRunner):
         Args:
             prompt: The user prompt to send.
             system_prompt: Optional system prompt.
-            **kwargs: Additional parameters.
+            **kwargs: Additional parameters (tools, messages).
 
         Returns:
             RunnerResult with response and metadata.
@@ -169,21 +203,34 @@ class OpenAIRunner(BaseRunner):
 
             client = AsyncOpenAI(**client_kwargs)
 
-            messages = []
-            if system_prompt:
-                messages.append({"role": "system", "content": system_prompt})
-            messages.append({"role": "user", "content": prompt})
+            messages_override = kwargs.get("messages")
+            if messages_override:
+                messages = list(messages_override)
+            else:
+                messages = []
+                if system_prompt:
+                    messages.append({"role": "system", "content": system_prompt})
+                if prompt:
+                    messages.append({"role": "user", "content": prompt})
 
-            response = await client.chat.completions.create(
-                model=kwargs.get("model", self.model),
-                messages=messages,
-                temperature=kwargs.get("temperature", self.temperature),
-                max_tokens=kwargs.get("max_tokens", self.max_tokens),
-            )
+            api_kwargs: dict[str, Any] = {
+                "model": kwargs.get("model", self.model),
+                "messages": messages,
+                "temperature": kwargs.get("temperature", self.temperature),
+                "max_tokens": kwargs.get("max_tokens", self.max_tokens),
+            }
+
+            tools = kwargs.get("tools")
+            if tools:
+                api_kwargs["tools"] = tools
+
+            response = await client.chat.completions.create(**api_kwargs)
 
             latency_ms = (time.time() - start_time) * 1000
 
-            content = response.choices[0].message.content or ""
+            message = response.choices[0].message
+            content = message.content or ""
+            tool_calls = self._parse_tool_calls(message)
             tokens_used = response.usage.total_tokens if response.usage else 0
 
             return self._create_result(
@@ -195,6 +242,7 @@ class OpenAIRunner(BaseRunner):
                     "finish_reason": response.choices[0].finish_reason,
                     "model": response.model,
                 },
+                tool_calls=tool_calls,
             )
 
         except ImportError:

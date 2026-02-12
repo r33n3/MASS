@@ -58,5 +58,13 @@ class AgentRegistry:
     def list_names(self) -> list[str]:
         return list(self._agents.keys())
 
+    def unregister(self, name: str) -> None:
+        """Remove an agent by name (used for hot-reload of custom strategies)."""
+        self._agents.pop(name, None)
+
+    def list_custom(self) -> list[RedTeamAgent]:
+        """Return agents tagged as 'custom'."""
+        return [a for a in self._agents.values() if "custom" in a.tags]
+
 
 agent_registry = AgentRegistry()

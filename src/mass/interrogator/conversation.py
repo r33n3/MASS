@@ -12,7 +12,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
-from mass.runners.base import BaseRunner, RunnerResult, RunnerStatus
+from mass.runners.base import BaseRunner, RunnerResult, RunnerStatus, ToolCall
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +54,8 @@ class ConversationResult:
     target_model: str = ""
     attacker_provider: str = ""
     target_provider: str = ""
+    success_indicators: list[str] = field(default_factory=list)
+    strategy_description: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -89,6 +91,8 @@ class ConversationResult:
             "target_model": self.target_model,
             "total_turns": self.total_turns,
             "duration_seconds": self.duration_seconds,
+            "success_indicators": self.success_indicators,
+            "strategy_description": self.strategy_description,
             "transcript": [
                 {
                     "turn": t.turn_number,
@@ -109,6 +113,11 @@ class ConversationManager:
     The target model responds.
     After each target response, the attacker decides whether to
     continue probing or declare success/failure.
+
+    Optionally supports MCP tool calling: if tool_definitions and an
+    mcp_client are provided, the target model receives tool definitions
+    and any tool_calls in its response are executed via MCP, with results
+    fed back for another model turn (up to max_tool_rounds per turn).
     """
 
     def __init__(
@@ -117,14 +126,20 @@ class ConversationManager:
         target: BaseRunner,
         max_turns: int = 10,
         target_system_prompt: str | None = None,
+        mcp_client: Any | None = None,
+        tool_definitions: list[dict] | None = None,
+        turn_callback: Any | None = None,
     ):
         self.attacker = attacker
         self.target = target
         self.max_turns = max_turns
         self.target_system_prompt = target_system_prompt
+        self.mcp_client = mcp_client
+        self.tool_definitions = tool_definitions
+        self.turn_callback = turn_callback
 
         # Conversation state: full message history sent to the target
-        self._target_messages: list[dict[str, str]] = []
+        self._target_messages: list[dict[str, Any]] = []
         # The attacker sees its own conversation (its system prompt + history)
         self._attacker_messages: list[dict[str, str]] = []
 
@@ -199,6 +214,7 @@ class ConversationManager:
                 provider=self.attacker.provider,
             )
             turns.append(attacker_turn)
+            self._emit_turn(attacker_turn, conversation_id, category, strategy)
 
             # Send to target
             target_result = self._send_to_target(attacker_text)
@@ -222,6 +238,7 @@ class ConversationManager:
                 provider=self.target.provider,
             )
             turns.append(target_turn)
+            self._emit_turn(target_turn, conversation_id, category, strategy)
 
             logger.debug(
                 "Turn %d: attacker sent %d chars, target replied %d chars (%.0fms)",
@@ -243,13 +260,15 @@ class ConversationManager:
             )
 
             if should_stop:
-                turns.append(ConversationTurn(
+                eval_turn = ConversationTurn(
                     turn_number=turn_num,
                     role=TurnRole.EVALUATOR,
                     content=analysis,
                     model=self.attacker.model,
                     provider=self.attacker.provider,
-                ))
+                )
+                turns.append(eval_turn)
+                self._emit_turn(eval_turn, conversation_id, category, strategy)
                 result.success = success
                 result.confidence = confidence
                 result.analysis = analysis
@@ -275,6 +294,30 @@ class ConversationManager:
 
         return result
 
+    def _emit_turn(
+        self,
+        turn: ConversationTurn,
+        conversation_id: str,
+        category: str,
+        strategy: str,
+    ) -> None:
+        """Emit a turn event via the callback if one is set."""
+        if not self.turn_callback:
+            return
+        try:
+            self.turn_callback(
+                turn_number=turn.turn_number,
+                role=turn.role.value,
+                content=turn.content,
+                strategy=strategy,
+                category=category,
+                model=turn.model,
+                latency_ms=turn.latency_ms,
+                conversation_id=conversation_id,
+            )
+        except Exception:
+            logger.debug("Turn callback failed", exc_info=True)
+
     def _get_attacker_message(
         self, system_prompt: str, user_prompt: str,
     ) -> str | None:
@@ -293,24 +336,102 @@ class ConversationManager:
             return None
 
     def _send_to_target(self, message: str) -> RunnerResult | None:
-        """Send a message to the target model with conversation history."""
+        """Send a message to the target model with conversation history.
+
+        If tool_definitions are set, the target model receives tool definitions
+        and any tool_calls in the response are executed via MCP. Results are fed
+        back for up to 3 additional tool rounds per conversation turn.
+        """
         self._target_messages.append({"role": "user", "content": message})
 
+        extra_kwargs: dict[str, Any] = {}
+        if self.tool_definitions:
+            extra_kwargs["tools"] = self.tool_definitions
+
         try:
-            # Use the runner's raw interface — we manage our own history
             result = self.target.run(
                 prompt=message,
                 system_prompt=self.target_system_prompt,
+                **extra_kwargs,
             )
-            if result.is_success:
+            if not result.is_success:
+                return result
+
+            # Tool-call loop: if model wants to use tools, execute and re-send
+            max_tool_rounds = 3
+            for _ in range(max_tool_rounds):
+                if not result.tool_calls or not self.mcp_client:
+                    break
+
+                # Execute tool calls via MCP
+                tool_results = self._execute_tool_calls(result.tool_calls)
+
+                # Append assistant tool-call message to history
                 self._target_messages.append({
                     "role": "assistant",
                     "content": result.response,
+                    "tool_calls": [
+                        {"id": tc.id, "name": tc.name, "arguments": tc.arguments}
+                        for tc in result.tool_calls
+                    ],
                 })
+                # Append tool results to history
+                for tr in tool_results:
+                    self._target_messages.append({
+                        "role": "tool",
+                        "tool_call_id": tr["tool_call_id"],
+                        "content": tr["content"],
+                    })
+
+                # Re-send with full history so model sees tool results
+                result = self.target.run(
+                    prompt="",
+                    system_prompt=self.target_system_prompt,
+                    messages=self._target_messages,
+                    **extra_kwargs,
+                )
+                if not result.is_success:
+                    break
+
+            # Final response to conversation history
+            self._target_messages.append({
+                "role": "assistant",
+                "content": result.response,
+            })
             return result
         except Exception as e:
             logger.error("Target model exception: %s", e)
             return None
+
+    def _execute_tool_calls(self, tool_calls: list[ToolCall]) -> list[dict]:
+        """Execute tool calls via MCP client and return results.
+
+        Bridges async MCP client calls from the sync conversation context.
+        """
+        import asyncio
+
+        results = []
+        for tc in tool_calls:
+            try:
+                loop = asyncio.new_event_loop()
+                mcp_result = loop.run_until_complete(
+                    self.mcp_client.call_tool(tc.name, tc.arguments)
+                )
+                loop.close()
+
+                content = str(mcp_result.result) if mcp_result.success else f"Error: {mcp_result.error}"
+                results.append({
+                    "tool_call_id": tc.id or tc.name,
+                    "content": content,
+                })
+                logger.info("Tool call %s(%s) -> %s", tc.name, tc.arguments, content[:200])
+            except Exception as e:
+                results.append({
+                    "tool_call_id": tc.id or tc.name,
+                    "content": f"Tool execution failed: {e}",
+                })
+                logger.warning("Tool call %s failed: %s", tc.name, e)
+        return results
 
     def _build_evaluation_prompt(self, target_response: str, turn: int) -> str:
         """Build prompt asking attacker to evaluate target response."""

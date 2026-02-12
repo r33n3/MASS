@@ -4,8 +4,6 @@ from typing import Sequence
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
-
 from mass.storage.models.deployment import Deployment
 from mass.storage.repositories.base import BaseRepository
 
@@ -17,18 +15,45 @@ class DeploymentRepository(BaseRepository[Deployment]):
         super().__init__(Deployment, session)
 
     async def get_with_components(self, id: str) -> Deployment | None:
-        """Get deployment with its components eagerly loaded.
+        """Get deployment by ID.
 
         Args:
             id: Deployment ID.
 
         Returns:
-            Deployment with components or None.
+            Deployment or None.
         """
+        stmt = select(Deployment).where(Deployment.id == id)
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def find_by_source_path(
+        self, tenant_id: str, source_path: str
+    ) -> Deployment | None:
+        """Find existing non-deleted deployment by normalized source path."""
+        normalized = source_path.replace("\\", "/").rstrip("/").lower()
         stmt = (
             select(Deployment)
-            .where(Deployment.id == id)
-            .options(selectinload(Deployment.components))
+            .where(Deployment.tenant_id == tenant_id)
+            .where(Deployment.source_path.isnot(None))
+            .order_by(Deployment.created_at.desc())
+        )
+        result = await self.session.execute(stmt)
+        for dep in result.scalars():
+            if dep.source_path and dep.source_path.replace("\\", "/").rstrip("/").lower() == normalized:
+                return dep
+        return None
+
+    async def find_by_name(
+        self, tenant_id: str, name: str
+    ) -> Deployment | None:
+        """Find existing non-deleted deployment by exact name."""
+        stmt = (
+            select(Deployment)
+            .where(Deployment.tenant_id == tenant_id)
+            .where(Deployment.name == name)
+            .order_by(Deployment.created_at.desc())
+            .limit(1)
         )
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
@@ -39,7 +64,6 @@ class DeploymentRepository(BaseRepository[Deployment]):
         *,
         offset: int = 0,
         limit: int = 100,
-        include_deleted: bool = False,
     ) -> Sequence[Deployment]:
         """List deployments for a tenant.
 
@@ -47,14 +71,11 @@ class DeploymentRepository(BaseRepository[Deployment]):
             tenant_id: Tenant ID.
             offset: Pagination offset.
             limit: Pagination limit.
-            include_deleted: Include soft-deleted deployments.
 
         Returns:
             List of deployments.
         """
         stmt = select(Deployment).where(Deployment.tenant_id == tenant_id)
-        if not include_deleted:
-            stmt = stmt.where(Deployment.is_deleted == False)
         stmt = stmt.order_by(Deployment.created_at.desc())
         stmt = stmt.offset(offset).limit(limit)
         result = await self.session.execute(stmt)
@@ -80,7 +101,6 @@ class DeploymentRepository(BaseRepository[Deployment]):
         stmt = (
             select(Deployment)
             .where(Deployment.tenant_id == tenant_id)
-            .where(Deployment.is_deleted == False)
             .where(Deployment.name.ilike(f"%{query}%"))
             .limit(limit)
         )

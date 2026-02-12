@@ -11,6 +11,8 @@ import concurrent.futures
 import json
 import logging
 import os
+import re
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -23,6 +25,9 @@ from mass.api.schemas.interrogation import (
     AvailableAgent,
     ConversationResponse,
     ConversationTurnResponse,
+    CustomStrategyContent,
+    CustomStrategyCreate,
+    CustomStrategyFile,
     InterrogationFinding,
     InterrogationRequest,
     InterrogationResponse,
@@ -212,6 +217,8 @@ async def start_interrogation(
         agent_names=request.agent_names,
         max_turns=request.max_turns,
         max_strategies_per_agent=request.max_strategies_per_agent,
+        mcp_servers=[s.model_dump(exclude_none=True) for s in request.mcp_servers]
+            if request.mcp_servers else None,
     )
 
     attacker_label = f"{request.attacker.provider}/{request.attacker.model}"
@@ -223,6 +230,7 @@ async def start_interrogation(
         "config": config,
         "scan_id": request.scan_id,
         "deployment_id": request.deployment_id,
+        "target_id": request.target_id,
         "tenant_id": tenant.tenant_id,
         "attacker_model": attacker_label,
         "target_model": target_label,
@@ -234,6 +242,9 @@ async def start_interrogation(
         "status": "pending",
         "attacker_model": attacker_label,
         "target_model": target_label,
+        "deployment_id": request.deployment_id,
+        "target_id": getattr(request, 'target_id', None),
+        "scan_id": request.scan_id,
         "strategies_run": 0,
         "successful_attacks": 0,
         "duration_seconds": 0.0,
@@ -442,6 +453,228 @@ async def ollama_pull(
     )
 
 
+# ---- Custom strategy directory ----
+
+_STRATEGIES_DIR = Path(os.getenv("MASS_STRATEGIES_DIR", "/app/data/strategies"))
+
+
+def _ensure_strategies_dir() -> Path:
+    """Ensure the custom strategies directory exists."""
+    _STRATEGIES_DIR.mkdir(parents=True, exist_ok=True)
+    return _STRATEGIES_DIR
+
+
+def _validate_filename(filename: str) -> str:
+    """Validate and sanitize a strategy filename."""
+    if not filename.endswith((".yaml", ".yml")):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Filename must end in .yaml or .yml",
+        )
+    # Prevent path traversal
+    safe = re.sub(r"[^\w\-.]", "_", filename)
+    if safe != filename:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Filename contains invalid characters. Use alphanumeric, hyphens, underscores, and dots.",
+        )
+    if safe.startswith("_"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Filenames starting with _ are reserved for templates.",
+        )
+    return safe
+
+
+@router.get(
+    "/strategies/custom",
+    response_model=list[CustomStrategyFile],
+    summary="List custom strategy files",
+    description="Returns metadata for all custom YAML strategy files.",
+)
+async def list_custom_strategies(tenant: CurrentTenantDep) -> list[CustomStrategyFile]:
+    """List all custom strategy YAML files with parsed metadata."""
+    from mass.interrogator.agents.custom_loader import _parse_agent_file
+
+    directory = _ensure_strategies_dir()
+    results: list[CustomStrategyFile] = []
+
+    for path in sorted(directory.glob("*.y*ml")):
+        if path.name.startswith("_"):
+            continue
+        agent = _parse_agent_file(path)
+        if agent:
+            results.append(CustomStrategyFile(
+                filename=path.name,
+                name=agent.name,
+                category=agent.category.value,
+                description=agent.description,
+                severity=agent.base_severity.value,
+                strategy_count=len(agent.strategies),
+                tags=agent.tags,
+            ))
+        else:
+            # Include invalid files so users can see and fix them
+            results.append(CustomStrategyFile(
+                filename=path.name,
+                name=path.stem,
+                category="unknown",
+                description="(invalid YAML — see logs)",
+                severity="info",
+                strategy_count=0,
+                tags=["custom", "invalid"],
+            ))
+
+    return results
+
+
+@router.post(
+    "/strategies/custom",
+    response_model=CustomStrategyFile,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a custom strategy",
+    description="Upload a new YAML strategy file. Validates content before saving.",
+)
+async def create_custom_strategy(
+    request: CustomStrategyCreate,
+    tenant: CurrentTenantDep,
+) -> CustomStrategyFile:
+    """Create a new custom strategy YAML file."""
+    from mass.interrogator.agents.custom_loader import (
+        reload_custom_strategies,
+        validate_yaml_content,
+    )
+
+    filename = _validate_filename(request.filename)
+    directory = _ensure_strategies_dir()
+    filepath = directory / filename
+
+    if filepath.exists():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"File '{filename}' already exists. Use PUT to update.",
+        )
+
+    # Validate before writing
+    agent, error = validate_yaml_content(request.content)
+    if error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Validation failed: {error}",
+        )
+
+    filepath.write_text(request.content, encoding="utf-8")
+
+    # Hot-reload custom agents
+    reload_custom_strategies(directory)
+
+    return CustomStrategyFile(
+        filename=filename,
+        name=agent.name,
+        category=agent.category.value,
+        description=agent.description,
+        severity=agent.base_severity.value,
+        strategy_count=len(agent.strategies),
+        tags=agent.tags,
+    )
+
+
+@router.get(
+    "/strategies/custom/{filename}",
+    response_model=CustomStrategyContent,
+    summary="Get custom strategy YAML content",
+    description="Returns the raw YAML content of a custom strategy file for editing.",
+)
+async def get_custom_strategy(filename: str, tenant: CurrentTenantDep) -> CustomStrategyContent:
+    """Get the raw YAML content of a custom strategy file."""
+    directory = _ensure_strategies_dir()
+    filepath = directory / filename
+
+    if not filepath.exists() or not filepath.name.endswith((".yaml", ".yml")):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Strategy file '{filename}' not found.",
+        )
+
+    content = filepath.read_text(encoding="utf-8")
+    return CustomStrategyContent(filename=filename, content=content)
+
+
+@router.put(
+    "/strategies/custom/{filename}",
+    response_model=CustomStrategyFile,
+    summary="Update a custom strategy",
+    description="Update an existing YAML strategy file. Validates before saving.",
+)
+async def update_custom_strategy(
+    filename: str,
+    request: CustomStrategyCreate,
+    tenant: CurrentTenantDep,
+) -> CustomStrategyFile:
+    """Update an existing custom strategy YAML file."""
+    from mass.interrogator.agents.custom_loader import (
+        reload_custom_strategies,
+        validate_yaml_content,
+    )
+
+    directory = _ensure_strategies_dir()
+    filepath = directory / filename
+
+    if not filepath.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Strategy file '{filename}' not found.",
+        )
+
+    # Validate before writing
+    agent, error = validate_yaml_content(request.content)
+    if error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Validation failed: {error}",
+        )
+
+    filepath.write_text(request.content, encoding="utf-8")
+
+    # Hot-reload custom agents
+    reload_custom_strategies(directory)
+
+    return CustomStrategyFile(
+        filename=filename,
+        name=agent.name,
+        category=agent.category.value,
+        description=agent.description,
+        severity=agent.base_severity.value,
+        strategy_count=len(agent.strategies),
+        tags=agent.tags,
+    )
+
+
+@router.delete(
+    "/strategies/custom/{filename}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete a custom strategy",
+    description="Remove a custom strategy YAML file and unregister its agents.",
+)
+async def delete_custom_strategy(filename: str, tenant: CurrentTenantDep) -> None:
+    """Delete a custom strategy YAML file."""
+    from mass.interrogator.agents.custom_loader import reload_custom_strategies
+
+    directory = _ensure_strategies_dir()
+    filepath = directory / filename
+
+    if not filepath.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Strategy file '{filename}' not found.",
+        )
+
+    filepath.unlink()
+
+    # Hot-reload to remove the deleted agent
+    reload_custom_strategies(directory)
+
+
 async def _execute_interrogation(job_id: str) -> None:
     """Execute interrogation in background."""
     job = _active_jobs.get(job_id)
@@ -451,7 +684,7 @@ async def _execute_interrogation(job_id: str) -> None:
     job["status"] = "running"
     job["message"] = "Starting..."
 
-    # Helper to update both in-memory and Redis status
+    # Helper to update both in-memory, Redis, AND broadcast via WebSocket
     async def _update_status(message: str) -> None:
         job["message"] = message
         await _save_job_to_redis(job_id, {
@@ -459,8 +692,22 @@ async def _execute_interrogation(job_id: str) -> None:
             "status": "running",
             "attacker_model": job["attacker_model"],
             "target_model": job["target_model"],
+            "deployment_id": job.get("deployment_id"),
+            "target_id": job.get("target_id"),
+            "scan_id": job.get("scan_id"),
             "message": message,
         })
+        try:
+            from mass.dashboard.websocket import broadcast_interrogation_update
+            await broadcast_interrogation_update(
+                job_id=job_id,
+                status="running",
+                message=message,
+                attacker_model=job["attacker_model"],
+                target_model=job["target_model"],
+            )
+        except Exception:
+            pass
 
     await _update_status("Starting...")
 
@@ -481,27 +728,47 @@ async def _execute_interrogation(job_id: str) -> None:
             attacker_host = config.attacker_endpoint or hosts["source"]
             attacker_model = config.attacker_model
             await _update_status(f"Preparing attacker model: {attacker_model}...")
-            ok, msg = await ensure_model_ready(attacker_host, attacker_model)
+            ok, msg, resolved = await ensure_model_ready(attacker_host, attacker_model)
             if not ok:
                 raise RuntimeError(f"Attacker model setup failed: {msg}")
-            logger.info("Attacker model ready: %s on %s", attacker_model, attacker_host)
+            if resolved and resolved != attacker_model:
+                logger.info("Attacker model resolved: %s → %s", attacker_model, resolved)
+                config.attacker_model = resolved
+            logger.info("Attacker model ready: %s on %s", config.attacker_model, attacker_host)
 
         # Check target model if using Ollama
         if config.target_provider == "ollama":
             target_host = config.target_endpoint or hosts["destination"]
             target_model = config.target_model
             await _update_status(f"Preparing target model: {target_model}...")
-            ok, msg = await ensure_model_ready(target_host, target_model)
+            ok, msg, resolved = await ensure_model_ready(target_host, target_model)
             if not ok:
                 raise RuntimeError(f"Target model setup failed: {msg}")
-            logger.info("Target model ready: %s on %s", target_model, target_host)
+            if resolved and resolved != target_model:
+                logger.info("Target model resolved: %s → %s", target_model, resolved)
+                config.target_model = resolved
+            logger.info("Target model ready: %s on %s", config.target_model, target_host)
 
         await _update_status("Running interrogation...")
 
-        orchestrator = InterrogationOrchestrator(config)
+        # Create a turn callback that broadcasts each conversation turn
+        # via WebSocket. The orchestrator runs in a thread pool (sync),
+        # so we capture the event loop and schedule async broadcasts.
+        _loop = asyncio.get_running_loop()
 
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(
+        def _turn_callback(**kwargs):
+            from mass.dashboard.websocket import broadcast_interrogation_turn
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    broadcast_interrogation_turn(job_id=job_id, **kwargs),
+                    _loop,
+                )
+            except Exception:
+                pass
+
+        orchestrator = InterrogationOrchestrator(config, turn_callback=_turn_callback)
+
+        result = await _loop.run_in_executor(
             _interrogation_pool,
             orchestrator.execute,
         )
@@ -533,12 +800,17 @@ async def _execute_interrogation(job_id: str) -> None:
 
         # Broadcast via WebSocket
         try:
-            from mass.dashboard.websocket import broadcast_scan_complete
-            await broadcast_scan_complete(
-                scan_id=job_id,
+            from mass.dashboard.websocket import broadcast_interrogation_update
+            await broadcast_interrogation_update(
+                job_id=job_id,
                 status="completed",
-                duration_seconds=int(result.duration_seconds),
-                findings_count=len(result.findings),
+                message=f"Completed: {result.successful_attacks} attacks, "
+                        f"{result.failed_attacks} defended in {result.duration_seconds:.1f}s",
+                strategies_run=result.strategies_run,
+                successful_attacks=result.successful_attacks,
+                attacker_model=result.attacker_model,
+                target_model=result.target_model,
+                duration_seconds=result.duration_seconds,
             )
         except Exception:
             pass
@@ -550,10 +822,25 @@ async def _execute_interrogation(job_id: str) -> None:
             "status": "failed",
             "attacker_model": job["attacker_model"],
             "target_model": job["target_model"],
+            "deployment_id": job.get("deployment_id"),
+            "target_id": job.get("target_id"),
+            "scan_id": job.get("scan_id"),
             "message": f"Failed: {e}",
             "errors": [str(e)],
         })
         _active_jobs.pop(job_id, None)
+
+        try:
+            from mass.dashboard.websocket import broadcast_interrogation_update
+            await broadcast_interrogation_update(
+                job_id=job_id,
+                status="failed",
+                message=f"Failed: {e}",
+                attacker_model=job["attacker_model"],
+                target_model=job["target_model"],
+            )
+        except Exception:
+            pass
 
 
 def _build_response_dict(job_id: str, job: dict, result: Any) -> dict:
@@ -597,6 +884,8 @@ def _build_response_dict(job_id: str, job: dict, result: Any) -> dict:
             "attacker_model": conv.attacker_model,
             "target_model": conv.target_model,
             "turns": turns,
+            "success_indicators": getattr(conv, 'success_indicators', []),
+            "strategy_description": getattr(conv, 'strategy_description', ''),
         })
 
     return {
@@ -604,6 +893,9 @@ def _build_response_dict(job_id: str, job: dict, result: Any) -> dict:
         "status": "completed",
         "attacker_model": result.attacker_model,
         "target_model": result.target_model,
+        "deployment_id": job.get("deployment_id"),
+        "target_id": job.get("target_id"),
+        "scan_id": job.get("scan_id"),
         "agents_run": result.agents_run,
         "strategies_run": result.strategies_run,
         "successful_attacks": result.successful_attacks,

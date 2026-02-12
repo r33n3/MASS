@@ -470,6 +470,7 @@ class ScanService:
         target_files: list[str] | None = None,
         inline_content: str | None = None,
         agent_meta: dict[str, Any] | None = None,
+        architecture_map: dict[str, Any] | None = None,
     ) -> ScanResult:
         """Scan a deployment or individual target.
 
@@ -490,6 +491,7 @@ class ScanService:
             inline_content: Inline content for targets supplied directly.
             agent_meta: Agent-to-agent metadata (agent_url, agent_protocol,
                 upstream_agents, downstream_agents, etc.).
+            architecture_map: AI-analyzed code architecture map from profiling.
 
         Returns:
             ScanResult with all findings.
@@ -503,6 +505,7 @@ class ScanService:
                 deployment_path, profile_name, deployment_name,
                 on_progress, on_findings, model_endpoint, model_provider,
                 model_name, model_api_key, system_prompt, remediation_cache,
+                architecture_map,
             )
         else:
             # Single-target scan (focused plan)
@@ -526,6 +529,7 @@ class ScanService:
         model_api_key: str | None,
         system_prompt: str | None,
         remediation_cache: Any | None,
+        architecture_map: dict[str, Any] | None = None,
     ) -> ScanResult:
         """Full directory-based scan (original behavior)."""
         from pathlib import Path
@@ -557,6 +561,7 @@ class ScanService:
             ),
             has_secrets_risk=True,
             has_model_endpoint=bool(model_endpoint),
+            architecture_map=architecture_map,
         )
 
         plan = self.create_scan(deployment, profile_name)

@@ -3,18 +3,24 @@
 Administrative operations and tenant management.
 """
 
+import logging
+import os
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import delete, func, select
 
 from mass.api.dependencies import (
     CurrentTenantDep,
+    DBSession,
     TenantRepo,
     UserRepo,
     PaginationDep,
 )
 from mass.api.schemas.common import PaginationMeta, SuccessResponse
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -338,3 +344,57 @@ async def list_all_users(
             has_more=pagination.offset + len(items) < total,
         ),
     )
+
+
+@router.delete(
+    "/reset",
+    response_model=SuccessResponse,
+    summary="Reset all data",
+    description=(
+        "Delete ALL scans, findings, interrogations, deployments/targets, and reports. "
+        "Tenants, users, and API keys are preserved."
+    ),
+)
+async def reset_all_data(
+    tenant: CurrentTenantDep,
+    db: DBSession,
+) -> SuccessResponse:
+    """Reset all operational data for a clean slate."""
+    from mass.storage.models.deployment import Deployment, Scan
+    from mass.storage.models.finding import Finding, Report
+
+    # Count before deleting
+    finding_count = await db.scalar(select(func.count()).select_from(Finding)) or 0
+    scan_count = await db.scalar(select(func.count()).select_from(Scan)) or 0
+    deployment_count = await db.scalar(select(func.count()).select_from(Deployment)) or 0
+    report_count = await db.scalar(select(func.count()).select_from(Report)) or 0
+
+    # Delete in dependency order (findings → reports → scans → deployments)
+    await db.execute(delete(Finding))
+    await db.execute(delete(Report))
+    await db.execute(delete(Scan))
+    await db.execute(delete(Deployment))
+    await db.commit()
+
+    # Clear Redis interrogation jobs
+    try:
+        import redis.asyncio as aioredis
+
+        redis_url = os.getenv("MASS_REDIS_URL", "redis://localhost:6379/0")
+        r = aioredis.from_url(redis_url, decode_responses=True)
+        interrogation_keys = []
+        async for key in r.scan_iter(match="mass:interrogation:*"):
+            interrogation_keys.append(key)
+        if interrogation_keys:
+            await r.delete(*interrogation_keys)
+        await r.aclose()
+        logger.info("Cleared %d Redis interrogation keys", len(interrogation_keys))
+    except Exception as e:
+        logger.warning("Failed to clear Redis interrogation data: %s", e)
+
+    msg = (
+        f"Reset complete: {deployment_count} targets, {scan_count} scans, "
+        f"{finding_count} findings, {report_count} reports deleted"
+    )
+    logger.info(msg)
+    return SuccessResponse(message=msg)

@@ -119,6 +119,8 @@ class ReportGenerator:
         metadata: dict[str, Any] | None = None,
         verdict: dict[str, Any] | None = None,
         threat_model: dict[str, Any] | None = None,
+        report_type: str = "security",
+        ai_summary: str | None = None,
     ) -> GeneratedReport:
         """Generate a report in the specified format.
 
@@ -131,6 +133,8 @@ class ReportGenerator:
             metadata: Optional additional metadata.
             verdict: Optional Final Verdict Judge assessment.
             threat_model: Optional STRIDE-AI threat model.
+            report_type: Report type: security, compliance, executive.
+            ai_summary: Optional AI-generated project overview.
 
         Returns:
             GeneratedReport with content.
@@ -145,6 +149,8 @@ class ReportGenerator:
             content = self._html.format(
                 findings, scan_id, compliance_result, metadata,
                 verdict=verdict, threat_model=threat_model,
+                report_type=report_type,
+                ai_summary=ai_summary,
             )
             filename = f"mass_report_{timestamp}.html"
         elif format == ReportFormat.JSON:

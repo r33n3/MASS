@@ -19,6 +19,8 @@ from mass.api.routes import (
     chat,
     targets,
     docs,
+    ollama,
+    guardrails_policies,
 )
 
 __all__ = [
@@ -40,4 +42,6 @@ __all__ = [
     "chat",
     "targets",
     "docs",
+    "ollama",
+    "guardrails_policies",
 ]

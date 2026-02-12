@@ -106,6 +106,7 @@ class DashboardFinding(BaseModel):
     line_number: int | None = None
     description: str = ""
     closed_by_scan_id: str | None = None
+    meta: dict | None = None
 
 
 class GuardrailExampleItem(BaseModel):
@@ -155,6 +156,56 @@ class DashboardFindingDetail(BaseModel):
     workflow_context: str | None = None  # How this fits in AI/ML workflows
     vulnerable_code: str | None = None  # The specific vulnerable code
     fixed_code: str | None = None  # Example of the corrected code
+
+    # Verification metadata (last_verification from meta)
+    meta: dict | None = None
+
+
+class VerifyFindingRequest(BaseModel):
+    """Request to verify a finding with LLM."""
+
+    provider: str = "ollama"
+    model: str | None = None
+    api_key: str | None = None
+    endpoint: str | None = None
+
+
+class VerifyBatchRequest(BaseModel):
+    """Request to verify multiple findings with LLM."""
+
+    finding_ids: list[str]
+    provider: str = "ollama"
+    model: str | None = None
+    api_key: str | None = None
+    endpoint: str | None = None
+
+
+class VerificationResult(BaseModel):
+    """Result of LLM finding verification."""
+
+    finding_id: str
+    finding_title: str
+    verdict: str  # "still_present" | "fixed" | "inconclusive"
+    confidence: float = 0.0
+    explanation: str = ""
+    evidence: str = ""
+    recommendation: str = ""
+    current_code: str | None = None
+    error: str | None = None
+    llm_prompt: str | None = None
+    llm_response: str | None = None
+
+
+class VerifyBatchResponse(BaseModel):
+    """Response for batch verification."""
+
+    results: list[VerificationResult]
+    provider: str
+    model: str
+    total: int
+    fixed_count: int
+    still_present_count: int
+    inconclusive_count: int
 
 
 # Endpoints
@@ -365,6 +416,15 @@ async def get_dashboard_scan_findings(
             except (json.JSONDecodeError, TypeError):
                 pass
 
+        # Fallback: extract file/line from meta if DB columns are null
+        file_path = f.file_path or meta_data.get("file") or None
+        line_number = f.line_number if f.line_number is not None else meta_data.get("line")
+
+        # Only expose last_verification from meta (not full meta which may have internal data)
+        exposed_meta: dict | None = None
+        if meta_data.get("last_verification"):
+            exposed_meta = {"last_verification": meta_data["last_verification"]}
+
         items.append(DashboardFinding(
             id=f.id,
             title=f.title,
@@ -372,10 +432,11 @@ async def get_dashboard_scan_findings(
             category=f.category or "unknown",
             component=meta_data.get("component_name", "unknown"),
             status=f.status or "open",
-            file_path=f.file_path,
-            line_number=f.line_number,
+            file_path=file_path,
+            line_number=line_number,
             description=f.description or "",
             closed_by_scan_id=getattr(f, "closed_by_scan_id", None),
+            meta=exposed_meta,
         ))
 
     return items
@@ -482,6 +543,10 @@ async def get_dashboard_finding_detail(
     vulnerable_code = finding.code_snippet
     fixed_code = _generate_fixed_code_example(finding, code_fix_examples)
 
+    # Fallback: extract file/line from meta if DB columns are null
+    detail_file_path = finding.file_path or meta_data.get("file") or None
+    detail_line_number = finding.line_number if finding.line_number is not None else meta_data.get("line")
+
     return DashboardFindingDetail(
         id=finding.id,
         title=finding.title,
@@ -489,8 +554,8 @@ async def get_dashboard_finding_detail(
         status=finding.status,
         category=finding.category or "unknown",
         component=meta_data.get("component_name", "unknown"),
-        file_path=finding.file_path,
-        line_number=finding.line_number,
+        file_path=detail_file_path,
+        line_number=detail_line_number,
         code_snippet=finding.code_snippet,
         description=finding.description or "",
         evidence=finding.evidence,
@@ -510,14 +575,15 @@ async def get_dashboard_finding_detail(
         workflow_context=workflow_context,
         vulnerable_code=vulnerable_code,
         fixed_code=fixed_code,
+        meta={"last_verification": meta_data["last_verification"]} if meta_data.get("last_verification") else None,
     )
 
 
 def _build_finding_attack_surface(finding, meta_data: dict) -> str:
     """Build a description of where the vulnerability exists in the code/workflow."""
     category = finding.category or "unknown"
-    file_path = finding.file_path or "unknown file"
-    line = finding.line_number
+    file_path = finding.file_path or meta_data.get("file") or "unknown file"
+    line = finding.line_number if finding.line_number is not None else meta_data.get("line")
     component = meta_data.get("component_name", "unknown component")
 
     # Build location string
@@ -774,6 +840,223 @@ async def update_finding_status(
 
     await finding_repo.update(finding, status=new_status)
     return {"id": finding_id, "status": new_status}
+
+
+async def _resolve_deployment_llm(
+    deployment_repo, deployment_id: str,
+    fallback_provider: str = "ollama",
+    fallback_api_key: str | None = None,
+) -> tuple[str, str | None, str | None]:
+    """Resolve provider/model/api_key from a deployment's stored config.
+
+    Returns (provider, model, api_key). Falls back to Ollama defaults
+    if the deployment has no LLM configuration.
+    """
+    import json as _json
+    import os
+
+    try:
+        deployment = await deployment_repo.get(deployment_id)
+        if not deployment or not deployment.meta:
+            return fallback_provider, None, fallback_api_key
+
+        meta = _json.loads(deployment.meta)
+        provider = meta.get("model_provider") or fallback_provider
+        model = meta.get("model_name")
+        api_key = fallback_api_key
+
+        # For non-Ollama providers, try to get API key from environment
+        if provider != "ollama" and not api_key:
+            key_env_map = {
+                "openai": "OPENAI_API_KEY",
+                "anthropic": "ANTHROPIC_API_KEY",
+                "google": "GOOGLE_API_KEY",
+                "gemini": "GEMINI_API_KEY",
+                "xai": "XAI_API_KEY",
+                "grok": "XAI_API_KEY",
+            }
+            env_name = key_env_map.get(provider, "")
+            if env_name:
+                api_key = os.getenv(env_name) or None
+
+        return provider, model, api_key
+    except Exception:
+        return fallback_provider, None, fallback_api_key
+
+
+@router.post("/findings/{finding_id}/verify", response_model=VerificationResult)
+async def verify_finding_endpoint(
+    finding_id: str,
+    request: VerifyFindingRequest,
+    tenant: CurrentTenantDep,
+    scan_repo: ScanRepo,
+    finding_repo: FindingRepo,
+    deployment_repo: DeploymentRepo,
+) -> VerificationResult:
+    """Verify a finding against current source code using an LLM.
+
+    Reads the current code at the finding's file/line and asks the LLM
+    whether the vulnerability has been fixed, is still present, or is
+    inconclusive.
+    """
+    import json
+
+    from mass.api.services.finding_verification import (
+        build_verification_meta,
+        verify_finding,
+    )
+
+    finding = await finding_repo.get(finding_id)
+    if not finding:
+        raise HTTPException(status_code=404, detail="Finding not found")
+
+    scan = await scan_repo.get(finding.scan_id)
+    if not scan or scan.tenant_id != tenant.tenant_id:
+        raise HTTPException(status_code=404, detail="Finding not found")
+
+    # Use provided config (from chat settings) or fall back to deployment meta
+    provider = request.provider
+    model = request.model
+    api_key = request.api_key
+    endpoint = request.endpoint
+    if not model and scan.deployment_id:
+        provider, model, api_key = await _resolve_deployment_llm(
+            deployment_repo, scan.deployment_id, provider, api_key,
+        )
+
+    result = await verify_finding(
+        finding,
+        provider=provider,
+        model=model,
+        api_key=api_key,
+        endpoint=endpoint,
+    )
+
+    # Persist verification result to finding meta
+    meta_data: dict = {}
+    if finding.meta:
+        try:
+            meta_data = json.loads(finding.meta)
+        except (json.JSONDecodeError, TypeError):
+            pass
+    meta_data["last_verification"] = build_verification_meta(result)
+    await finding_repo.update(finding, meta=json.dumps(meta_data))
+
+    return VerificationResult(
+        finding_id=finding.id,
+        finding_title=finding.title or "",
+        verdict=result.get("verdict", "inconclusive"),
+        confidence=result.get("confidence", 0.0),
+        explanation=result.get("explanation", ""),
+        evidence=result.get("evidence", ""),
+        recommendation=result.get("recommendation", ""),
+        current_code=result.get("current_code"),
+        error=result.get("error"),
+        llm_prompt=result.get("llm_prompt"),
+        llm_response=result.get("llm_response"),
+    )
+
+
+@router.post("/findings/verify-batch", response_model=VerifyBatchResponse)
+async def verify_findings_batch_endpoint(
+    request: VerifyBatchRequest,
+    tenant: CurrentTenantDep,
+    scan_repo: ScanRepo,
+    finding_repo: FindingRepo,
+    deployment_repo: DeploymentRepo,
+) -> VerifyBatchResponse:
+    """Verify multiple findings against current source code using an LLM.
+
+    Processes findings sequentially. Maximum 20 findings per batch.
+    """
+    import json
+
+    from mass.api.services.finding_verification import (
+        build_verification_meta,
+        verify_findings_batch,
+    )
+
+    if len(request.finding_ids) > 20:
+        raise HTTPException(status_code=400, detail="Maximum 20 findings per batch")
+
+    # Load and validate all findings
+    findings: list = []
+    scan_for_resolve = None
+    for fid in request.finding_ids:
+        finding = await finding_repo.get(fid)
+        if not finding:
+            continue
+        scan = await scan_repo.get(finding.scan_id)
+        if scan and scan.tenant_id == tenant.tenant_id:
+            findings.append(finding)
+            if not scan_for_resolve:
+                scan_for_resolve = scan
+
+    if not findings:
+        raise HTTPException(status_code=404, detail="No valid findings found")
+
+    # Use provided config (from chat settings) or fall back to deployment meta
+    provider = request.provider
+    model = request.model
+    api_key = request.api_key
+    endpoint = request.endpoint
+    if not model and scan_for_resolve and scan_for_resolve.deployment_id:
+        provider, model, api_key = await _resolve_deployment_llm(
+            deployment_repo, scan_for_resolve.deployment_id, provider, api_key,
+        )
+
+    results = await verify_findings_batch(
+        findings,
+        provider=provider,
+        model=model,
+        api_key=api_key,
+        endpoint=endpoint,
+    )
+
+    # Persist verification results to each finding's meta
+    for finding, result in zip(findings, results):
+        meta_data: dict = {}
+        if finding.meta:
+            try:
+                meta_data = json.loads(finding.meta)
+            except (json.JSONDecodeError, TypeError):
+                pass
+        meta_data["last_verification"] = build_verification_meta(result)
+        await finding_repo.update(finding, meta=json.dumps(meta_data))
+
+    # Use the model name from the first result (reflects what was actually used)
+    resolved_model = (results[0].get("model", "") if results else model) or provider
+
+    response_results = [
+        VerificationResult(
+            finding_id=r.get("finding_id", ""),
+            finding_title=r.get("finding_title", ""),
+            verdict=r.get("verdict", "inconclusive"),
+            confidence=r.get("confidence", 0.0),
+            explanation=r.get("explanation", ""),
+            evidence=r.get("evidence", ""),
+            recommendation=r.get("recommendation", ""),
+            current_code=r.get("current_code"),
+            error=r.get("error"),
+            llm_prompt=r.get("llm_prompt"),
+            llm_response=r.get("llm_response"),
+        )
+        for r in results
+    ]
+
+    fixed = sum(1 for r in results if r.get("verdict") == "fixed")
+    present = sum(1 for r in results if r.get("verdict") == "still_present")
+    inconclusive = sum(1 for r in results if r.get("verdict") == "inconclusive")
+
+    return VerifyBatchResponse(
+        results=response_results,
+        provider=provider,
+        model=resolved_model,
+        total=len(results),
+        fixed_count=fixed,
+        still_present_count=present,
+        inconclusive_count=inconclusive,
+    )
 
 
 @router.get("/deployments/{deployment_id}/topology")

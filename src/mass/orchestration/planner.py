@@ -26,6 +26,7 @@ class JobType(str, Enum):
     ATTACK_SURFACE = "attack_surface"
     WORKFLOW_ANALYSIS = "workflow_analysis"
     MODEL_INTERROGATION = "model_interrogation"
+    ARCHITECTURE_ANALYSIS = "architecture_analysis"
 
 
 @dataclass
@@ -162,6 +163,9 @@ class DeploymentInfo:
     workflow_files: list[str] = field(default_factory=list)
     infrastructure_files: list[str] = field(default_factory=list)
 
+    # Architecture map from AI code analysis (Iteration 25)
+    architecture_map: dict[str, Any] | None = None
+
 
 class ScanPlanner:
     """Plans scans based on deployment and profile.
@@ -215,8 +219,31 @@ class ScanPlanner:
             plan.add_job(job)
             deployment_scan_id = job.id
 
-        # 2. Static analysis jobs (depend on deployment scan)
-        depends = [deployment_scan_id] if deployment_scan_id else []
+        # 1b. Architecture analysis (generates findings from LLM-analyzed code map)
+        architecture_job_id: str | None = None
+        arch = deployment.architecture_map
+        if arch:
+            job = PlannedJob(
+                job_type=JobType.ARCHITECTURE_ANALYSIS,
+                name="Architecture Security Analysis",
+                description=(
+                    "Generate targeted findings from AI-analyzed code architecture: "
+                    "tool capabilities, model connections, safety measures, entry points"
+                ),
+                priority=15,  # Run early — feeds downstream analyzers
+                timeout_seconds=60,
+                depends_on=[deployment_scan_id] if deployment_scan_id else [],
+                config={"architecture_map": arch},
+            )
+            plan.add_job(job)
+            architecture_job_id = job.id
+
+        # 2. Static analysis jobs (depend on deployment scan + architecture)
+        depends = []
+        if deployment_scan_id:
+            depends.append(deployment_scan_id)
+        if architecture_job_id:
+            depends.append(architecture_job_id)
 
         # Secret detection
         if self.profile.secret_detector.enabled and deployment.has_secrets_risk:
@@ -316,6 +343,50 @@ class ScanPlanner:
                 )
                 plan.add_job(job)
                 static_analysis_ids.append(job.id)
+
+        # 2b. Architecture-aware targeting (enrich existing jobs)
+        if arch:
+            # Focus context analysis on identified system prompt sources
+            prompt_sources = [
+                mc.get("system_prompt_source")
+                for mc in arch.get("model_connections", [])
+                if mc.get("system_prompt_source")
+            ]
+            if prompt_sources:
+                for job in plan.jobs:
+                    if job.job_type == JobType.CONTEXT_ANALYSIS:
+                        job.config["architecture_prompt_sources"] = prompt_sources
+
+            # Enrich secret detection with files that handle API keys
+            key_locations = [
+                mc.get("call_location", "").split(":")[0]
+                for mc in arch.get("model_connections", [])
+                if mc.get("call_location")
+            ]
+            if key_locations:
+                for job in plan.jobs:
+                    if job.job_type == JobType.SECRET_DETECTION:
+                        job.config["architecture_key_files"] = key_locations
+
+            # Add tool security hints to deployment scan
+            dangerous_tools = [
+                t for t in arch.get("tool_definitions", [])
+                if set(t.get("capabilities", [])) & {"command_execution", "file_system", "network"}
+            ]
+            if dangerous_tools:
+                for job in plan.jobs:
+                    if job.job_type == JobType.DEPLOYMENT_SCAN:
+                        job.config["architecture_dangerous_tools"] = [
+                            {"name": t.get("name"), "capabilities": t.get("capabilities"), "location": t.get("location")}
+                            for t in dangerous_tools
+                        ]
+
+            # Add architecture pattern and entry points to attack surface config
+            if arch.get("entry_points"):
+                for job in plan.jobs:
+                    if job.job_type == JobType.ATTACK_SURFACE:
+                        job.config["architecture_entry_points"] = arch["entry_points"]
+                        job.config["architecture_pattern"] = arch.get("pattern", "unknown")
 
         # 3. Attack surface analysis (depends on static analysis)
         if self.profile.attack_surface_analyzer.enabled:

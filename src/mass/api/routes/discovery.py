@@ -38,7 +38,7 @@ router = APIRouter()
 
 # Base directory for mounted scan targets inside Docker
 TARGETS_BASE = Path("/app/targets")
-GITHUB_CLONES_DIR = TARGETS_BASE / "_github_clones"
+GITHUB_CLONES_DIR = Path("/app/github_clones")
 
 
 def _is_github_url(path: str) -> bool:

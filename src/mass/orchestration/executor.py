@@ -4,6 +4,7 @@ The JobExecutor runs individual scan jobs and collects results.
 It manages timeouts, retries, and error handling.
 """
 
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -13,6 +14,8 @@ from uuid import uuid4
 from mass.core.findings import Finding
 from mass.core.types import Severity
 from mass.orchestration.planner import JobType, PlannedJob
+
+logger = logging.getLogger(__name__)
 
 
 class JobStatus(str, Enum):
@@ -152,6 +155,7 @@ class JobExecutor:
         """Register default job handlers."""
         # Each handler is registered for its job type
         self._handlers[JobType.DEPLOYMENT_SCAN] = self._handle_deployment_scan
+        self._handlers[JobType.ARCHITECTURE_ANALYSIS] = self._handle_architecture_analysis
         self._handlers[JobType.SECRET_DETECTION] = self._handle_secret_detection
         self._handlers[JobType.INFRASTRUCTURE_SCAN] = self._handle_infrastructure_scan
         self._handlers[JobType.MODEL_FILE_SCAN] = self._handle_model_file_scan
@@ -565,9 +569,13 @@ class JobExecutor:
             category=AttackCategory.INSECURE_PLUGIN,
             component_type=ComponentType.MCP_SERVER,
             component_name=str(sf.location.file_path.name) if sf.location else "mcp-server",
+            file_path=str(sf.location.file_path) if sf.location and sf.location.file_path else None,
+            line_number=sf.location.line_number if sf.location else None,
             evidence=[Evidence(
                 type="code",
                 content=sf.code_snippet or sf.description,
+                source_file=str(sf.location.file_path) if sf.location and sf.location.file_path else None,
+                source_line=sf.location.line_number if sf.location else None,
                 metadata={"line": sf.location.line_number} if sf.location else {},
             )],
             remediation=Remediation(
@@ -922,6 +930,498 @@ class JobExecutor:
 
         return result
 
+    def _handle_architecture_analysis(
+        self, job: PlannedJob, context: dict[str, Any]
+    ) -> JobResult:
+        """Generate targeted findings from AI-analyzed code architecture.
+
+        Converts the architecture map (from LLM profiling) into concrete,
+        file-level findings with evidence.  This scopes the security
+        analysis to known risk areas instead of relying solely on pattern
+        matching across the entire codebase.
+
+        Produces findings for:
+        - Dangerous tool capabilities (command_execution, file_system, network)
+        - Model connections with tool-calling enabled (prompt injection surface)
+        - Inline system prompts (leakage risk)
+        - Missing safety measures (no input validation, output filtering, rate limiting)
+        - Unauthenticated entry points
+        - Data flows without sanitization
+        """
+        from mass.core.findings import Evidence, Remediation
+        from mass.core.types import AttackCategory, ComponentType, Severity
+
+        result = JobResult(job_id=job.id, job_type=job.job_type)
+        result.mark_started()
+
+        try:
+            import os
+
+            arch = job.config.get("architecture_map", {})
+            if not arch:
+                result.mark_completed()
+                result.output["message"] = "No architecture map available"
+                return result
+
+            # Store architecture in context for downstream handlers
+            context["_architecture_map"] = arch
+
+            # Resolve relative file paths from LLM output against deployment root
+            deploy_root = context.get("deployment_path", "")
+
+            def _resolve_path(fp: str | None) -> str | None:
+                """Resolve a relative file path against the deployment root."""
+                if not fp or not deploy_root:
+                    return fp
+                if os.path.isabs(fp):
+                    return fp
+                resolved = os.path.join(deploy_root, fp)
+                if os.path.isfile(resolved):
+                    return resolved
+                return fp  # keep original if resolved path doesn't exist
+
+            # Collect files referenced in architecture for scoping downstream
+            arch_files: set[str] = set()
+            for tool in arch.get("tool_definitions", []):
+                loc = tool.get("location", "")
+                if ":" in loc:
+                    arch_files.add(_resolve_path(loc.split(":")[0]) or loc.split(":")[0])
+            for mc in arch.get("model_connections", []):
+                loc = mc.get("call_location", "")
+                if ":" in loc:
+                    arch_files.add(_resolve_path(loc.split(":")[0]) or loc.split(":")[0])
+            for ep in arch.get("entry_points", []):
+                loc = ep.get("location", "")
+                if ":" in loc:
+                    arch_files.add(_resolve_path(loc.split(":")[0]) or loc.split(":")[0])
+            context["_architecture_files"] = list(arch_files)
+
+            # ── Tool capability findings ──
+            for tool in arch.get("tool_definitions", []):
+                tool_name = tool.get("name", "unknown")
+                capabilities = tool.get("capabilities", [])
+                location = tool.get("location", "")
+                file_path, line_num = self._parse_location(location)
+                file_path = _resolve_path(file_path)
+                validation = tool.get("validation")
+
+                dangerous_caps = set(capabilities) & {
+                    "command_execution", "file_system", "network", "database",
+                }
+
+                if dangerous_caps:
+                    cap_descriptions = {
+                        "command_execution": (
+                            Severity.CRITICAL,
+                            AttackCategory.EXCESSIVE_AGENCY,
+                            "can execute system commands — arbitrary code execution via prompt injection",
+                            "Sandbox or remove command execution capability. Use allowlists for permitted commands.",
+                        ),
+                        "file_system": (
+                            Severity.HIGH,
+                            AttackCategory.DATA_LEAKAGE,
+                            "has file system access — data exfiltration or file planting via crafted tool calls",
+                            "Restrict file paths to an allowlist. Use read-only access where possible.",
+                        ),
+                        "network": (
+                            Severity.HIGH,
+                            AttackCategory.DATA_LEAKAGE,
+                            "can make network requests — data exfiltration to external servers",
+                            "Allowlist permitted domains. Block outbound connections to unknown hosts.",
+                        ),
+                        "database": (
+                            Severity.HIGH,
+                            AttackCategory.DATA_LEAKAGE,
+                            "has database access — sensitive data extraction via injection",
+                            "Use parameterized queries. Restrict to read-only for analytics tools.",
+                        ),
+                    }
+
+                    for cap in dangerous_caps:
+                        severity, category, desc_suffix, remediation_text = cap_descriptions[cap]
+
+                        result.add_finding(Finding(
+                            title=f"Dangerous Tool: '{tool_name}' {cap.replace('_', ' ')}",
+                            description=(
+                                f"Tool '{tool_name}' at {location or '?'} {desc_suffix}. "
+                                f"Capabilities: {', '.join(capabilities)}."
+                            ),
+                            severity=severity,
+                            category=category,
+                            component_type=ComponentType.CODE,
+                            component_name=tool_name,
+                            file_path=file_path,
+                            line_number=line_num,
+                            confidence=0.85,
+                            evidence=[Evidence(
+                                type="architecture_analysis",
+                                content=f"Tool: {tool_name}\nCapabilities: {', '.join(capabilities)}\nValidation: {validation or 'none detected'}",
+                                source_file=file_path,
+                                source_line=line_num,
+                            )],
+                            remediation=Remediation(
+                                summary=remediation_text,
+                                steps=[
+                                    f"Review tool '{tool_name}' at {location}",
+                                    "Add input validation and parameter sanitization",
+                                    remediation_text,
+                                    "Add logging/audit trail for all tool invocations",
+                                ],
+                            ),
+                            owasp_ids=["LLM06", "LLM08"],
+                            tags=["architecture", cap],
+                            metadata={
+                                "confidence_level": "architecture_analysis",
+                                "source": "architecture_map",
+                            },
+                        ))
+
+                # Missing validation on any tool with capabilities
+                # LLM sometimes returns "null" as string for validation
+                effective_validation = validation if validation and validation != "null" else None
+                if capabilities and not effective_validation:
+                    result.add_finding(Finding(
+                        title=f"Unvalidated Tool: '{tool_name}' lacks input validation",
+                        description=(
+                            f"Tool '{tool_name}' at {location or '?'} has capabilities "
+                            f"({', '.join(capabilities)}) but no input validation was detected. "
+                            f"Unvalidated tool inputs enable injection and parameter manipulation."
+                        ),
+                        severity=Severity.MEDIUM,
+                        category=AttackCategory.INSECURE_PLUGIN,
+                        component_type=ComponentType.CODE,
+                        component_name=tool_name,
+                        file_path=file_path,
+                        line_number=line_num,
+                        confidence=0.7,
+                        evidence=[Evidence(
+                            type="architecture_analysis",
+                            content=f"Tool: {tool_name}\nCapabilities: {', '.join(capabilities)}\nValidation: none detected",
+                            source_file=file_path,
+                            source_line=line_num,
+                        )],
+                        remediation=Remediation(
+                            summary="Add input validation to tool parameters",
+                            steps=[
+                                f"Add parameter type checking and validation to '{tool_name}'",
+                                "Validate parameter ranges, lengths, and allowed values",
+                                "Reject unexpected or malformed tool inputs",
+                            ],
+                        ),
+                        owasp_ids=["LLM05", "LLM06"],
+                        tags=["architecture", "validation"],
+                        metadata={
+                            "confidence_level": "architecture_analysis",
+                            "source": "architecture_map",
+                        },
+                    ))
+
+            # ── Model connection findings ──
+            for mc in arch.get("model_connections", []):
+                provider = mc.get("provider", "unknown")
+                model_name = mc.get("model_name", "")
+                has_tools = mc.get("has_tools", False)
+                has_streaming = mc.get("has_streaming", False)
+                prompt_source = mc.get("system_prompt_source")
+                location = mc.get("call_location", "")
+                file_path, line_num = self._parse_location(location)
+                file_path = _resolve_path(file_path)
+                display_model = f"{provider}/{model_name}" if model_name else provider
+
+                if has_tools:
+                    result.add_finding(Finding(
+                        title=f"Model with Tools: {display_model} enables tool calling",
+                        description=(
+                            f"Model connection to {display_model} at {location or '?'} "
+                            f"has tool/function calling enabled. Adversarial input can "
+                            f"manipulate which tools are called and with what parameters, "
+                            f"creating a prompt injection -> tool abuse attack chain."
+                        ),
+                        severity=Severity.HIGH,
+                        category=AttackCategory.PROMPT_INJECTION,
+                        component_type=ComponentType.MODEL,
+                        component_name=display_model,
+                        file_path=file_path,
+                        line_number=line_num,
+                        confidence=0.8,
+                        evidence=[Evidence(
+                            type="architecture_analysis",
+                            content=f"Provider: {provider}\nModel: {model_name}\nTools: enabled\nStreaming: {has_streaming}",
+                            source_file=file_path,
+                            source_line=line_num,
+                        )],
+                        remediation=Remediation(
+                            summary="Validate tool call parameters before execution",
+                            steps=[
+                                "Add a tool call validation layer between model output and tool execution",
+                                "Implement allowlists for permitted tool+parameter combinations",
+                                "Log all tool calls for audit trail",
+                                "Consider human-in-the-loop for destructive operations",
+                            ],
+                        ),
+                        owasp_ids=["LLM01", "LLM06"],
+                        tags=["architecture", "tool_calling", "prompt_injection"],
+                        metadata={
+                            "confidence_level": "architecture_analysis",
+                            "source": "architecture_map",
+                        },
+                    ))
+
+                if prompt_source == "inline":
+                    result.add_finding(Finding(
+                        title=f"Inline System Prompt: {display_model} prompt hardcoded in source",
+                        description=(
+                            f"The system prompt for {display_model} at {location or '?'} is "
+                            f"hardcoded directly in source code. Inline prompts are extractable "
+                            f"by anyone with repo access and are more susceptible to prompt "
+                            f"injection extraction techniques."
+                        ),
+                        severity=Severity.MEDIUM,
+                        category=AttackCategory.SYSTEM_PROMPT_LEAKAGE,
+                        component_type=ComponentType.CONTEXT,
+                        component_name=display_model,
+                        file_path=file_path,
+                        line_number=line_num,
+                        confidence=0.8,
+                        evidence=[Evidence(
+                            type="architecture_analysis",
+                            content=f"System prompt source: inline (hardcoded in {location})",
+                            source_file=file_path,
+                            source_line=line_num,
+                        )],
+                        remediation=Remediation(
+                            summary="Move system prompts to external configuration",
+                            steps=[
+                                "Move system prompt to environment variable or config file",
+                                "Use prompt templates with variable injection",
+                                "Add prompt extraction detection/prevention",
+                            ],
+                        ),
+                        owasp_ids=["LLM07"],
+                        tags=["architecture", "system_prompt"],
+                        metadata={
+                            "confidence_level": "architecture_analysis",
+                            "source": "architecture_map",
+                        },
+                    ))
+
+            # ── Missing safety measures ──
+            safety_types = {
+                sm.get("type") for sm in arch.get("safety_measures", [])
+            }
+
+            safety_gaps = {
+                "input_validation": (
+                    Severity.HIGH,
+                    AttackCategory.PROMPT_INJECTION,
+                    "No Input Validation Detected",
+                    "No input validation or sanitization was found in the codebase. "
+                    "User input flows directly to AI models without filtering, "
+                    "enabling prompt injection, jailbreak, and data exfiltration attacks.",
+                    ["LLM01"],
+                    ["Add input sanitization layer before model calls",
+                     "Filter known injection patterns (role overrides, delimiter attacks)",
+                     "Validate input length and character sets",
+                     "Consider using a prompt firewall"],
+                ),
+                "output_filtering": (
+                    Severity.MEDIUM,
+                    AttackCategory.IMPROPER_OUTPUT,
+                    "No Output Filtering Detected",
+                    "No output filtering or content moderation was found. Model responses "
+                    "are returned directly to users without checking for sensitive data "
+                    "leakage, harmful content, or instruction-following attacks.",
+                    ["LLM02", "LLM05"],
+                    ["Add output validation layer after model responses",
+                     "Check for PII/sensitive data in outputs",
+                     "Implement content safety filtering",
+                     "Log and monitor model outputs for anomalies"],
+                ),
+                "rate_limiting": (
+                    Severity.MEDIUM,
+                    AttackCategory.UNBOUNDED_CONSUMPTION,
+                    "No Rate Limiting Detected",
+                    "No rate limiting was found on AI-facing endpoints. An attacker "
+                    "could exhaust API quotas, compute resources, or run denial-of-service "
+                    "attacks against the model infrastructure.",
+                    ["LLM10"],
+                    ["Add per-user and per-IP rate limiting",
+                     "Implement token budget limits per request",
+                     "Add circuit breakers for downstream model calls",
+                     "Monitor for usage anomalies"],
+                ),
+                "authentication": (
+                    Severity.MEDIUM,
+                    AttackCategory.EXCESSIVE_AGENCY,
+                    "No Authentication Layer Detected",
+                    "No authentication mechanism was found protecting AI endpoints. "
+                    "Any user can interact with the AI system without identity verification.",
+                    ["LLM06"],
+                    ["Add authentication to all AI-facing endpoints",
+                     "Implement API key or token-based auth",
+                     "Add authorization checks for tool access"],
+                ),
+            }
+
+            for safety_type, (severity, category, title, description, owasp, steps) in safety_gaps.items():
+                if safety_type not in safety_types:
+                    result.add_finding(Finding(
+                        title=f"Missing Guardrail: {title}",
+                        description=description,
+                        severity=severity,
+                        category=category,
+                        component_type=ComponentType.CODE,
+                        component_name=f"missing_{safety_type}",
+                        confidence=0.7,
+                        evidence=[Evidence(
+                            type="architecture_analysis",
+                            content=f"Safety measures detected: {', '.join(safety_types) or 'none'}\nMissing: {safety_type}",
+                        )],
+                        remediation=Remediation(
+                            summary=steps[0],
+                            steps=steps,
+                        ),
+                        owasp_ids=owasp,
+                        tags=["architecture", "guardrail", safety_type],
+                        metadata={
+                            "confidence_level": "architecture_analysis",
+                            "source": "architecture_map",
+                        },
+                    ))
+
+            # ── Entry point findings ──
+            for ep in arch.get("entry_points", []):
+                location = ep.get("location", "")
+                file_path, line_num = self._parse_location(location)
+                file_path = _resolve_path(file_path)
+                ep_type = ep.get("type", "endpoint")
+                auth = ep.get("authentication")
+                accepts = ep.get("accepts", "input")
+
+                # LLM sometimes returns "null" as string
+                if not auth or auth == "null":
+                    result.add_finding(Finding(
+                        title=f"Unauthenticated {ep_type.title()}: {location or 'unknown'}",
+                        description=(
+                            f"Entry point at {location or '?'} accepts {accepts} "
+                            f"without authentication. Any user can send input to the "
+                            f"AI system through this endpoint, which is the first step "
+                            f"in prompt injection and abuse attacks."
+                        ),
+                        severity=Severity.MEDIUM,
+                        category=AttackCategory.EXCESSIVE_AGENCY,
+                        component_type=ComponentType.CODE,
+                        component_name=ep_type,
+                        file_path=file_path,
+                        line_number=line_num,
+                        confidence=0.75,
+                        evidence=[Evidence(
+                            type="architecture_analysis",
+                            content=f"Entry point: {ep_type}\nAccepts: {accepts}\nAuthentication: none detected",
+                            source_file=file_path,
+                            source_line=line_num,
+                        )],
+                        remediation=Remediation(
+                            summary=f"Add authentication to {ep_type} endpoint",
+                            steps=[
+                                f"Add authentication middleware to {location}",
+                                "Require API key, JWT, or session-based auth",
+                                "Implement rate limiting per authenticated user",
+                            ],
+                        ),
+                        owasp_ids=["LLM06"],
+                        tags=["architecture", "entry_point", "authentication"],
+                        metadata={
+                            "confidence_level": "architecture_analysis",
+                            "source": "architecture_map",
+                        },
+                    ))
+
+            # ── Data flow findings (unsanitized flows between components) ──
+            for df in arch.get("data_flows", []):
+                src = df.get("from", "")
+                dst = df.get("to", "")
+                data_type = df.get("data_type", "data")
+
+                # Flag flows that carry user input or prompts to models without sanitization
+                risky_data_types = {"user_input", "prompt", "query", "message", "request"}
+                if data_type.lower() in risky_data_types or "user" in data_type.lower():
+                    result.add_finding(Finding(
+                        title=f"Unsanitized Data Flow: {src} -> {dst}",
+                        description=(
+                            f"Data flow carries {data_type} from '{src}' to '{dst}'. "
+                            f"If this flow is not sanitized, it creates a direct path "
+                            f"for injection attacks to reach the AI model."
+                        ),
+                        severity=Severity.LOW,
+                        category=AttackCategory.PROMPT_INJECTION,
+                        component_type=ComponentType.CODE,
+                        component_name=f"{src}->{dst}",
+                        confidence=0.5,
+                        evidence=[Evidence(
+                            type="architecture_analysis",
+                            content=f"Data flow: {src} -> {dst}\nData type: {data_type}",
+                        )],
+                        remediation=Remediation(
+                            summary="Add sanitization to this data flow",
+                            steps=[
+                                f"Add input sanitization between {src} and {dst}",
+                                "Filter injection patterns in the data flow",
+                            ],
+                        ),
+                        owasp_ids=["LLM01"],
+                        tags=["architecture", "data_flow"],
+                        metadata={
+                            "confidence_level": "architecture_analysis",
+                            "source": "architecture_map",
+                        },
+                    ))
+
+            result.items_processed = (
+                len(arch.get("tool_definitions", []))
+                + len(arch.get("model_connections", []))
+                + len(arch.get("entry_points", []))
+                + len(arch.get("safety_measures", []))
+                + len(arch.get("data_flows", []))
+            )
+            result.output["tools_analyzed"] = len(arch.get("tool_definitions", []))
+            result.output["models_analyzed"] = len(arch.get("model_connections", []))
+            result.output["entry_points_analyzed"] = len(arch.get("entry_points", []))
+            result.output["safety_measures_found"] = len(arch.get("safety_measures", []))
+            result.output["data_flows_analyzed"] = len(arch.get("data_flows", []))
+            result.output["architecture_files"] = context.get("_architecture_files", [])
+            result.mark_completed()
+
+        except Exception as e:
+            result.mark_failed(str(e))
+
+        return result
+
+    @staticmethod
+    def _parse_location(location: str) -> tuple[str | None, int | None]:
+        """Parse 'file.py:42' location string into (file_path, line_number).
+
+        Handles annotated formats from LLM output:
+        - 'src/foo.py:42' → ('src/foo.py', 42)
+        - 'src/foo.py:15(import), 38(init)' → ('src/foo.py', 15)
+        - 'src/foo.py: ClassName' → ('src/foo.py', None)
+        - 'src/foo.py' → ('src/foo.py', None)
+        """
+        import re
+
+        if not location:
+            return None, None
+        if ":" in location:
+            parts = location.split(":", 1)
+            remainder = parts[1].strip()
+            # Try to extract a leading integer (line number) from the remainder
+            m = re.match(r"(\d+)", remainder)
+            if m:
+                return parts[0].strip(), int(m.group(1))
+            # Remainder is non-numeric (e.g. " VectorStore") — just a file path
+            return parts[0].strip(), None
+        return location.strip(), None
+
     def _handle_secret_detection(
         self, job: PlannedJob, context: dict[str, Any]
     ) -> JobResult:
@@ -962,6 +1462,19 @@ class JobExecutor:
 
             if file_index:
                 target_files = self._filter_files(file_index, extensions=secret_extensions)
+
+                # Architecture-aware scoping: ensure files that handle API keys
+                # (identified by architecture analysis) are always scanned
+                arch_key_files = job.config.get("architecture_key_files", [])
+                arch_files = context.get("_architecture_files", [])
+                if arch_key_files or arch_files:
+                    priority_files = set(arch_key_files) | set(arch_files)
+                    for af in priority_files:
+                        for fi in file_index:
+                            if fi.endswith(af) or af.endswith(fi) or fi == af:
+                                if fi not in target_files:
+                                    target_files.append(fi)
+                    result.output["architecture_key_files"] = len(priority_files)
             else:
                 # Fallback: let detector do its own traversal
                 detection_result = detector.scan_directory(root)
@@ -1198,6 +1711,21 @@ class JobExecutor:
                 py_files = self._filter_files(file_index, extensions={".py"})
                 target_files = list(set(target_files + py_files))
 
+                # Architecture-aware scoping: ensure files identified by
+                # architecture analysis (prompt sources, model call sites)
+                # are included even if they don't match name patterns
+                arch_prompt_sources = job.config.get("architecture_prompt_sources", [])
+                arch_files = context.get("_architecture_files", [])
+                if arch_prompt_sources or arch_files:
+                    priority_files = set(arch_prompt_sources) | set(arch_files)
+                    for af in priority_files:
+                        # Match against file index (architecture uses relative paths)
+                        for fi in file_index:
+                            if fi.endswith(af) or af.endswith(fi) or fi == af:
+                                if fi not in target_files:
+                                    target_files.append(fi)
+                    result.output["architecture_scoped_files"] = len(priority_files)
+
                 # Exclude binary/model files that other scanners handle
                 target_files = [
                     f for f in target_files
@@ -1361,7 +1889,10 @@ class JobExecutor:
     ) -> JobResult:
         """Handle attack surface analysis.
 
-        Uses deployment manifest (no file traversal needed).
+        Uses deployment manifest and architecture entry points.
+        Architecture-aware: adds components from the architecture map
+        (entry points, tools, model connections) so the attack surface
+        analyzer can generate more targeted vectors.
         """
         from mass.analyzers.attack_surface.analyzer import AttackSurfaceAnalyzer
         from mass.core.types import ComponentType
@@ -1382,6 +1913,35 @@ class JobExecutor:
                     except (ValueError, KeyError):
                         components[comp_name] = ComponentType.CODE
 
+            # Architecture-aware: enrich component map with architecture data
+            arch_entry_points = job.config.get("architecture_entry_points", [])
+            arch_pattern = job.config.get("architecture_pattern", "")
+            arch_map = context.get("_architecture_map", {})
+
+            if arch_entry_points:
+                for ep in arch_entry_points:
+                    ep_name = ep.get("location", ep.get("type", "endpoint"))
+                    if ep_name not in components:
+                        components[ep_name] = ComponentType.CODE
+                result.output["architecture_entry_points"] = len(arch_entry_points)
+
+            # Add tools as components (they're attack targets)
+            for tool in arch_map.get("tool_definitions", []):
+                tool_name = tool.get("name", "")
+                if tool_name and tool_name not in components:
+                    components[tool_name] = ComponentType.CODE
+
+            # Add model connections as model components
+            for mc in arch_map.get("model_connections", []):
+                provider = mc.get("provider", "")
+                model_name = mc.get("model_name", "")
+                comp_name = f"{provider}/{model_name}" if model_name else provider
+                if comp_name and comp_name not in components:
+                    components[comp_name] = ComponentType.MODEL
+
+            if arch_pattern:
+                result.output["architecture_pattern"] = arch_pattern
+
             if not components:
                 result.mark_completed()
                 result.output["message"] = "No components discovered for attack surface analysis"
@@ -1392,6 +1952,7 @@ class JobExecutor:
 
             result.output["attack_vectors"] = len(analysis_result.attack_vectors)
             result.output["vulnerability_paths"] = len(analysis_result.vulnerability_paths)
+            result.output["total_components"] = len(components)
 
             for vector in analysis_result.attack_vectors:
                 finding = self._convert_attack_vector(vector)

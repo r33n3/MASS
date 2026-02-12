@@ -19,6 +19,7 @@ class ReportCreate(BaseModel):
     include_evidence: bool = Field(default=True, description="Include evidence in report")
     include_remediation: bool = Field(default=True, description="Include remediation guidance")
     include_threat_model: bool = Field(default=True, description="Include verdict and threat model sections")
+    include_ai_summary: bool = Field(default=True, description="Generate AI project overview for executive reports")
     frameworks: list[str] | None = Field(default=None, description="Compliance frameworks to include")
 
 

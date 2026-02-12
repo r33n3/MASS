@@ -71,6 +71,22 @@ class TargetCreate(BaseModel):
         default=False,
         description="Run filesystem discovery profiling on the target",
     )
+    auto_pipeline: bool = Field(
+        default=False,
+        description="Auto-analyze after adding: profile (architecture analysis) + scan",
+    )
+    auto_pipeline_provider: str | None = Field(
+        default=None,
+        description="LLM provider for auto-pipeline profiling: ollama, openai, anthropic",
+    )
+    auto_pipeline_model: str | None = Field(
+        default=None,
+        description="Model name for auto-pipeline profiling",
+    )
+    auto_pipeline_key: str | None = Field(
+        default=None,
+        description="API key for auto-pipeline profiling (cloud providers)",
+    )
 
     # Source location
     source_path: str | None = Field(default=None, description="Path to directory or file")
@@ -129,6 +145,10 @@ class TargetResponse(BaseModel):
         default=None,
         description="Next pipeline step: profile, scan, interrogate, or null (complete)",
     )
+    pipeline_status: str | None = Field(
+        default=None,
+        description="Auto-pipeline status: profiling, scanning, complete, error",
+    )
 
     created_at: datetime | None = Field(default=None, description="Registration timestamp")
     updated_at: datetime | None = Field(default=None, description="Last update timestamp")
@@ -151,6 +171,32 @@ class TargetDetailResponse(TargetResponse):
 
     # Topology from scan discovery
     topology: dict | None = Field(default=None, description="Discovered deployment topology graph (nodes/edges)")
+
+    # Architecture map from AI code analysis (Iteration 25)
+    architecture_map: dict | None = Field(
+        default=None,
+        description="AI-analyzed architecture: entry points, model connections, tools, data flows, safety measures",
+    )
+
+    # Risk context from user questionnaire (Iteration 26)
+    risk_questionnaire: dict | None = Field(
+        default=None,
+        description="User-provided risk context: public facing, data sensitivity, compliance, etc.",
+    )
+    risk_posture: dict | None = Field(
+        default=None,
+        description="Computed risk posture: score, level (low/medium/high/critical), risk factors",
+    )
+
+    # Instruction file content and LLM review
+    inline_content: str | None = Field(
+        default=None,
+        description="Inline instruction content (system prompt, rules file text)",
+    )
+    instruction_review: dict | None = Field(
+        default=None,
+        description="LLM-powered instruction security review: risk level, issues, recommendations",
+    )
 
 
 class TargetListResponse(BaseModel):

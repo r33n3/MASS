@@ -1,6 +1,6 @@
 """Ollama API runner.
 
-Runner for local Ollama models.
+Runner for local Ollama models with tool-calling support.
 """
 
 import os
@@ -9,7 +9,7 @@ from typing import Any
 
 import httpx
 
-from mass.runners.base import BaseRunner, RunnerResult, RunnerStatus, register_runner
+from mass.runners.base import BaseRunner, RunnerResult, RunnerStatus, ToolCall, register_runner
 
 
 @register_runner
@@ -17,6 +17,7 @@ class OllamaRunner(BaseRunner):
     """Ollama API runner.
 
     Executes prompts against a local Ollama server.
+    Supports tool/function calling via Ollama's native tools parameter.
     """
 
     name = "ollama"
@@ -50,6 +51,20 @@ class OllamaRunner(BaseRunner):
         )
         self.temperature = temperature
 
+    @staticmethod
+    def _parse_tool_calls(message: dict) -> list[ToolCall]:
+        """Parse tool_calls from an Ollama response message."""
+        raw = message.get("tool_calls", [])
+        calls = []
+        for i, tc in enumerate(raw):
+            fn = tc.get("function", {})
+            calls.append(ToolCall(
+                id=tc.get("id", f"call_{i}"),
+                name=fn.get("name", ""),
+                arguments=fn.get("arguments", {}),
+            ))
+        return calls
+
     def run(
         self,
         prompt: str,
@@ -61,7 +76,7 @@ class OllamaRunner(BaseRunner):
         Args:
             prompt: The user prompt to send.
             system_prompt: Optional system prompt.
-            **kwargs: Additional parameters.
+            **kwargs: Additional parameters (tools, messages).
 
         Returns:
             RunnerResult with response and metadata.
@@ -71,12 +86,18 @@ class OllamaRunner(BaseRunner):
         try:
             url = f"{self.base_url.rstrip('/')}/api/chat"
 
-            messages = []
-            if system_prompt:
-                messages.append({"role": "system", "content": system_prompt})
-            messages.append({"role": "user", "content": prompt})
+            # Support full message history override (for tool-call loops)
+            messages_override = kwargs.get("messages")
+            if messages_override:
+                messages = list(messages_override)
+            else:
+                messages = []
+                if system_prompt:
+                    messages.append({"role": "system", "content": system_prompt})
+                if prompt:
+                    messages.append({"role": "user", "content": prompt})
 
-            payload = {
+            payload: dict[str, Any] = {
                 "model": kwargs.get("model", self.model),
                 "messages": messages,
                 "stream": False,
@@ -85,6 +106,11 @@ class OllamaRunner(BaseRunner):
                 },
             }
 
+            # Tool calling support
+            tools = kwargs.get("tools")
+            if tools:
+                payload["tools"] = tools
+
             with httpx.Client(timeout=self.timeout) as client:
                 response = client.post(url, json=payload)
                 response.raise_for_status()
@@ -92,7 +118,9 @@ class OllamaRunner(BaseRunner):
 
             latency_ms = (time.time() - start_time) * 1000
 
-            content = data.get("message", {}).get("content", "")
+            message = data.get("message", {})
+            content = message.get("content", "")
+            tool_calls = self._parse_tool_calls(message)
             tokens_used = (
                 data.get("prompt_eval_count", 0) +
                 data.get("eval_count", 0)
@@ -107,6 +135,7 @@ class OllamaRunner(BaseRunner):
                     "model": data.get("model"),
                     "done_reason": data.get("done_reason"),
                 },
+                tool_calls=tool_calls,
             )
 
         except httpx.TimeoutException:
@@ -145,7 +174,7 @@ class OllamaRunner(BaseRunner):
         Args:
             prompt: The user prompt to send.
             system_prompt: Optional system prompt.
-            **kwargs: Additional parameters.
+            **kwargs: Additional parameters (tools, messages).
 
         Returns:
             RunnerResult with response and metadata.
@@ -155,12 +184,17 @@ class OllamaRunner(BaseRunner):
         try:
             url = f"{self.base_url.rstrip('/')}/api/chat"
 
-            messages = []
-            if system_prompt:
-                messages.append({"role": "system", "content": system_prompt})
-            messages.append({"role": "user", "content": prompt})
+            messages_override = kwargs.get("messages")
+            if messages_override:
+                messages = list(messages_override)
+            else:
+                messages = []
+                if system_prompt:
+                    messages.append({"role": "system", "content": system_prompt})
+                if prompt:
+                    messages.append({"role": "user", "content": prompt})
 
-            payload = {
+            payload: dict[str, Any] = {
                 "model": kwargs.get("model", self.model),
                 "messages": messages,
                 "stream": False,
@@ -169,6 +203,10 @@ class OllamaRunner(BaseRunner):
                 },
             }
 
+            tools = kwargs.get("tools")
+            if tools:
+                payload["tools"] = tools
+
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 response = await client.post(url, json=payload)
                 response.raise_for_status()
@@ -176,7 +214,9 @@ class OllamaRunner(BaseRunner):
 
             latency_ms = (time.time() - start_time) * 1000
 
-            content = data.get("message", {}).get("content", "")
+            message = data.get("message", {})
+            content = message.get("content", "")
+            tool_calls = self._parse_tool_calls(message)
             tokens_used = (
                 data.get("prompt_eval_count", 0) +
                 data.get("eval_count", 0)
@@ -191,6 +231,7 @@ class OllamaRunner(BaseRunner):
                     "model": data.get("model"),
                     "done_reason": data.get("done_reason"),
                 },
+                tool_calls=tool_calls,
             )
 
         except httpx.TimeoutException:
