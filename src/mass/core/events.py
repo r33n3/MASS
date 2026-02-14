@@ -42,6 +42,11 @@ class EventType(str, Enum):
     # Detection events
     DETECTION_TRIGGERED = "detection.triggered"
 
+    # Sandbox events
+    SANDBOX_STARTED = "sandbox.started"
+    SANDBOX_COMPLETED = "sandbox.completed"
+    SANDBOX_FAILED = "sandbox.failed"
+
     # Report events
     REPORT_GENERATED = "report.generated"
     REPORT_EXPORTED = "report.exported"

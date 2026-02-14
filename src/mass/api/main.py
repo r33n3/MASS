@@ -39,6 +39,8 @@ from mass.api.routes import (
     docs,
     ollama,
     guardrails_policies,
+    sandbox,
+    settings as settings_routes,
 )
 
 
@@ -202,11 +204,13 @@ def create_app() -> FastAPI:
     app.include_router(interrogation.router, prefix=f"{api_prefix}/interrogation", tags=["Interrogation"])
     app.include_router(browse.router, prefix=f"{api_prefix}/browse", tags=["Browse"])
     app.include_router(mcp_interrogation.router, prefix=f"{api_prefix}/mcp-interrogation", tags=["MCP Interrogation"])
+    app.include_router(sandbox.router, prefix=f"{api_prefix}/sandbox", tags=["Sandbox"])
     app.include_router(chat.router, prefix=f"{api_prefix}/chat", tags=["Chat"])
     app.include_router(targets.router, prefix=f"{api_prefix}/targets", tags=["Targets"])
     app.include_router(docs.router, prefix=f"{api_prefix}/docs", tags=["Documentation"])
     app.include_router(ollama.router, prefix=f"{api_prefix}/ollama", tags=["Ollama"])
     app.include_router(guardrails_policies.router, prefix=f"{api_prefix}/guardrails-policies", tags=["Guardrails & Policies"])
+    app.include_router(settings_routes.router, prefix=f"{api_prefix}/settings", tags=["Settings"])
 
     # WebSocket for real-time scan updates
     from mass.dashboard.websocket import router as ws_router

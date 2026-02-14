@@ -147,39 +147,14 @@ class ChatProvidersResponse(BaseModel):
     providers: list[dict[str, Any]] = Field(description="Available providers")
 
 
-# ---- Provider defaults ----
+# ---- Provider defaults (shared) ----
+# Canonical defaults live in mass.api.utils.llm_config.PROVIDER_DEFAULTS.
+# Chat overrides the Ollama endpoint to use the attacker host.
 
-_PROVIDER_DEFAULTS: dict[str, dict[str, str]] = {
-    "ollama": {
-        "model": "qwen3:8b",
-        "endpoint_env": "OLLAMA_ATTACKER_HOST",
-        "endpoint_fallback": "http://ollama-attacker:11434",
-    },
-    "openai": {
-        "model": "gpt-4o",
-        "endpoint_env": "OPENAI_API_BASE",
-        "endpoint_fallback": "https://api.openai.com/v1",
-        "key_env": "OPENAI_API_KEY",
-    },
-    "anthropic": {
-        "model": "claude-sonnet-4-5-20250929",
-        "endpoint_env": "ANTHROPIC_API_BASE",
-        "endpoint_fallback": "https://api.anthropic.com",
-        "key_env": "ANTHROPIC_API_KEY",
-    },
-    "gemini": {
-        "model": "gemini-2.0-flash",
-        "endpoint_env": "GEMINI_API_BASE",
-        "endpoint_fallback": "https://generativelanguage.googleapis.com/v1beta",
-        "key_env": "GEMINI_API_KEY",
-    },
-    "grok": {
-        "model": "grok-3",
-        "endpoint_env": "GROK_API_BASE",
-        "endpoint_fallback": "https://api.x.ai/v1",
-        "key_env": "XAI_API_KEY",
-    },
-}
+from mass.api.utils.llm_config import PROVIDER_DEFAULTS, resolve_llm_config, resolve_api_key
+
+_CHAT_OLLAMA_ENDPOINT_ENV = "OLLAMA_ATTACKER_HOST"
+_CHAT_OLLAMA_ENDPOINT_FALLBACK = "http://ollama-attacker:11434"
 
 
 # ---- Provider dispatchers (text-only, original) ----
@@ -536,26 +511,32 @@ async def chat(
                    f"Supported: {', '.join(_PROVIDERS.keys())}",
         )
 
-    # Resolve configuration
-    defaults = _PROVIDER_DEFAULTS.get(provider, {})
-    model = request.model or defaults.get("model", "")
-    endpoint = (
-        request.endpoint
-        or os.getenv(defaults.get("endpoint_env", ""), "")
-        or defaults.get("endpoint_fallback", "")
+    # Resolve configuration via platform defaults
+    # Chat uses OLLAMA_ATTACKER_HOST for Ollama (not OLLAMA_HOST)
+    chat_endpoint = request.endpoint
+    if not chat_endpoint and provider == "ollama":
+        chat_endpoint = (
+            os.getenv(_CHAT_OLLAMA_ENDPOINT_ENV, "")
+            or _CHAT_OLLAMA_ENDPOINT_FALLBACK
+        )
+
+    cfg = resolve_llm_config(
+        provider=provider,
+        model=request.model,
+        api_key=request.api_key,
+        endpoint=chat_endpoint,
     )
-    api_key = (
-        request.api_key
-        or os.getenv(defaults.get("key_env", ""), "")
-    )
+    provider, model, api_key, endpoint = cfg
     system_prompt = request.system_prompt or MASS_SYSTEM_PROMPT
 
     # Validate API key for providers that need one
     if provider != "ollama" and not api_key:
+        defaults = PROVIDER_DEFAULTS.get(provider, {})
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"API key required for provider '{provider}'. "
-                   f"Set via request body or {defaults.get('key_env', 'env var')} env var.",
+                   f"Set via request body, {defaults.get('key_env', 'env var')} env var, "
+                   f"or MASS_{defaults.get('key_env', '')} in .env.",
         )
 
     # Gather database context (deployments, scans, findings)
@@ -772,9 +753,9 @@ async def list_providers(tenant: CurrentTenantDep) -> ChatProvidersResponse:
     """List available chat providers and their status."""
     providers = []
 
-    for name, defaults in _PROVIDER_DEFAULTS.items():
+    for name, defaults in PROVIDER_DEFAULTS.items():
         endpoint = os.getenv(defaults.get("endpoint_env", ""), "") or defaults.get("endpoint_fallback", "")
-        has_key = bool(os.getenv(defaults.get("key_env", ""), "")) if "key_env" in defaults else True
+        has_key = bool(resolve_api_key(name)) if "key_env" in defaults else True
         available = bool(endpoint) and (has_key or name == "ollama")
 
         providers.append({
@@ -819,7 +800,7 @@ async def list_chat_models(
             return {"provider": "ollama", "models": [], "error": str(e)}
 
     # For non-Ollama providers, return the default model
-    defaults = _PROVIDER_DEFAULTS.get(provider, {})
+    defaults = PROVIDER_DEFAULTS.get(provider, {})
     return {
         "provider": provider,
         "models": [{"name": defaults.get("model", "unknown")}],
@@ -837,8 +818,8 @@ async def get_chat_config(tenant: CurrentTenantDep) -> dict[str, Any]:
     ollama_attacker = os.getenv("OLLAMA_ATTACKER_HOST", "") or "http://ollama-attacker:11434"
 
     providers = []
-    for name, defaults in _PROVIDER_DEFAULTS.items():
-        has_key = bool(os.getenv(defaults.get("key_env", ""), "")) if "key_env" in defaults else True
+    for name, defaults in PROVIDER_DEFAULTS.items():
+        has_key = bool(resolve_api_key(name)) if "key_env" in defaults else True
         providers.append({
             "name": name,
             "has_key": has_key,

@@ -153,10 +153,21 @@ class MassSettings(BaseSettings):
     scan_max_concurrent: int = Field(default=10, ge=1)
     probe_batch_size: int = Field(default=50, ge=1, le=500)
 
-    # Model providers (API keys)
+    # Platform-wide LLM defaults
+    default_provider: str = Field(
+        default="ollama",
+        description="Default LLM provider (ollama/openai/anthropic/gemini/grok)",
+    )
+    default_model: str = Field(
+        default="",
+        description="Default model name. Blank = use provider default.",
+    )
+
+    # Model provider API keys
     openai_api_key: SecretStr = Field(default=SecretStr(""))
     anthropic_api_key: SecretStr = Field(default=SecretStr(""))
     google_api_key: SecretStr = Field(default=SecretStr(""))
+    grok_api_key: SecretStr = Field(default=SecretStr(""))
 
     # Nested settings
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)

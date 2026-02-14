@@ -14,12 +14,12 @@ from datetime import datetime, timezone
 from typing import Any
 
 from mass.analyzers.code.llm_analyzer import (
-    PROVIDER_DEFAULTS,
     _call_anthropic,
     _call_ollama,
     _call_openai,
     _parse_llm_response,
 )
+from mass.api.utils.llm_config import resolve_llm_config
 from mass.storage.models.finding import Finding as DBFinding
 
 logger = logging.getLogger(__name__)
@@ -165,14 +165,11 @@ async def verify_finding(
     Returns a dict with: verdict, confidence, explanation, evidence,
     recommendation, current_code, error, llm_prompt, llm_response.
     """
-    # Resolve provider config
-    defaults = PROVIDER_DEFAULTS.get(provider, PROVIDER_DEFAULTS["ollama"])
-    resolved_model = model or defaults.get("model", "")
-    resolved_endpoint = endpoint or (
-        os.getenv(defaults.get("endpoint_env", ""), "")
-        or defaults.get("endpoint_fallback", "")
-    )
-    resolved_key = api_key or os.getenv(defaults.get("key_env", ""), "") or None
+    # Resolve provider config via shared resolver
+    cfg = resolve_llm_config(provider, model, api_key, endpoint)
+    resolved_model = cfg.model
+    resolved_endpoint = cfg.endpoint
+    resolved_key = cfg.api_key or None
 
     # For Ollama: auto-detect first available model if none specified
     if provider == "ollama" and not model:

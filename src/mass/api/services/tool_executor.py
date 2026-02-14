@@ -215,6 +215,89 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "required": ["filename"],
         },
     },
+    {
+        "name": "list_sandbox_jobs",
+        "description": (
+            "List sandbox security test runs with their status, score, "
+            "scenario name, and findings count. Use when users ask about "
+            "sandbox runs, sandbox results, or security tests."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "description": "Max jobs to return (default 20)",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "get_sandbox_results",
+        "description": (
+            "Get full results of a sandbox security test including "
+            "step-by-step timeline, findings, score, compliance mapping, "
+            "and guardrail recommendations. Use when users ask about "
+            "a specific sandbox run's details or results."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "job_id": {
+                    "type": "string",
+                    "description": "The sandbox job ID",
+                },
+            },
+            "required": ["job_id"],
+        },
+    },
+    {
+        "name": "list_sandbox_scenarios",
+        "description": (
+            "List available sandbox security test scenarios (built-in "
+            "and custom). Each scenario defines turns, assertions, and "
+            "tool mocks for testing AI application security."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
+    {
+        "name": "start_sandbox_run",
+        "description": (
+            "Start a sandbox security test using a named scenario against "
+            "a model. Returns the job ID to track progress. Use when users "
+            "ask to run a sandbox test or security test on a project."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "scenario_name": {
+                    "type": "string",
+                    "description": "Name of the scenario to run",
+                },
+                "model_provider": {
+                    "type": "string",
+                    "description": (
+                        "Provider: openai, anthropic, ollama, gemini, grok "
+                        "(default: openai)"
+                    ),
+                },
+                "model_name": {
+                    "type": "string",
+                    "description": "Model name (default: gpt-4o)",
+                },
+                "deployment_id": {
+                    "type": "string",
+                    "description": "Optional: link to a scanned project/target",
+                },
+            },
+            "required": ["scenario_name"],
+        },
+    },
 ]
 
 
@@ -945,3 +1028,216 @@ class ToolExecutor:
             ]
 
         return result
+
+    # ------------------------------------------------------------------
+    # Sandbox tools
+    # ------------------------------------------------------------------
+
+    async def _tool_list_sandbox_jobs(self, limit: int = 20) -> dict[str, Any]:
+        """List sandbox security test runs."""
+        try:
+            from mass.api.routes.sandbox import _list_from_redis
+
+            jobs = await _list_from_redis()
+            items = []
+            for j in jobs[:limit]:
+                items.append({
+                    "job_id": j.get("job_id", ""),
+                    "scenario_name": j.get("scenario_name", ""),
+                    "status": j.get("status", ""),
+                    "score": j.get("score"),
+                    "model_used": j.get("model_used", ""),
+                    "findings_count": j.get("findings_count", 0),
+                    "passed_assertions": j.get("passed_assertions", 0),
+                    "failed_assertions": j.get("failed_assertions", 0),
+                    "duration_seconds": j.get("duration_seconds", 0),
+                    "turns": f"{j.get('turns_completed', 0)}/{j.get('turns_total', 0)}",
+                    "created_at": j.get("created_at", ""),
+                })
+            return {"jobs": items, "total": len(items)}
+        except Exception as exc:
+            logger.warning("list_sandbox_jobs failed: %s", exc)
+            return {"error": str(exc), "jobs": []}
+
+    async def _tool_get_sandbox_results(self, job_id: str) -> dict[str, Any]:
+        """Get full results of a sandbox security test."""
+        try:
+            from mass.api.routes.sandbox import _load_from_redis
+
+            data = await _load_from_redis(job_id)
+            if not data:
+                return {"error": f"Sandbox job '{job_id}' not found"}
+
+            # Build concise summary
+            result: dict[str, Any] = {
+                "job_id": data.get("job_id", ""),
+                "scenario_name": data.get("scenario_name", ""),
+                "status": data.get("status", ""),
+                "score": data.get("score"),
+                "model_used": data.get("model_used", ""),
+                "duration_seconds": data.get("duration_seconds", 0),
+                "passed_assertions": data.get("passed_assertions", 0),
+                "failed_assertions": data.get("failed_assertions", 0),
+            }
+
+            # Steps summary (concise)
+            steps = data.get("steps", [])
+            result["steps"] = [
+                {
+                    "turn": s.get("turn_number", i),
+                    "user_input": (s.get("user_input", ""))[:100],
+                    "response_preview": (s.get("model_response", ""))[:150],
+                    "tool_calls": [tc.get("name", "") for tc in s.get("tool_calls", [])],
+                    "pass": len(s.get("assertions_failed", [])) == 0,
+                    "assertions_failed": s.get("assertions_failed", []),
+                }
+                for i, s in enumerate(steps)
+            ]
+
+            # Findings
+            findings = data.get("findings", [])
+            result["findings"] = [
+                {
+                    "title": f.get("title", ""),
+                    "severity": f.get("severity", ""),
+                    "category": f.get("category", ""),
+                    "description": (f.get("description", ""))[:200],
+                }
+                for f in findings
+            ]
+            result["findings_count"] = len(findings)
+
+            # Guardrail recommendations (concise)
+            guardrails = data.get("guardrail_recommendations", [])
+            result["guardrail_recommendations"] = [
+                {
+                    "type": g.get("guardrail_type", ""),
+                    "recommendation": g.get("recommendation", ""),
+                    "triggered_by": g.get("triggered_by", ""),
+                }
+                for g in guardrails[:6]
+            ]
+
+            return result
+        except Exception as exc:
+            logger.warning("get_sandbox_results failed: %s", exc)
+            return {"error": str(exc)}
+
+    async def _tool_list_sandbox_scenarios(self) -> dict[str, Any]:
+        """List available sandbox security test scenarios."""
+        try:
+            from mass.sandbox.scenario import list_builtin_scenarios
+
+            scenarios = list_builtin_scenarios()
+            items = [
+                {
+                    "name": s["name"],
+                    "category": s.get("category", "general"),
+                    "description": s.get("description", ""),
+                    "tags": s.get("tags", []),
+                    "turns_count": s.get("turns_count", 0),
+                    "source": "builtin",
+                }
+                for s in scenarios
+            ]
+
+            # Also check custom scenarios
+            from mass.api.routes.sandbox import _custom_scenarios_dir
+            import yaml
+
+            custom_dir = _custom_scenarios_dir()
+            for yaml_file in sorted(custom_dir.glob("*.yaml")):
+                try:
+                    with open(yaml_file, encoding="utf-8") as f:
+                        data = yaml.safe_load(f)
+                    items.append({
+                        "name": data.get("name", yaml_file.stem),
+                        "category": data.get("category", "general"),
+                        "description": data.get("description", ""),
+                        "tags": data.get("tags", []),
+                        "turns_count": len(data.get("turns", [])),
+                        "source": "custom",
+                    })
+                except Exception:
+                    continue
+
+            return {"scenarios": items, "total": len(items)}
+        except Exception as exc:
+            logger.warning("list_sandbox_scenarios failed: %s", exc)
+            return {"error": str(exc), "scenarios": []}
+
+    async def _tool_start_sandbox_run(
+        self,
+        scenario_name: str,
+        model_provider: str = "openai",
+        model_name: str = "gpt-4o",
+        deployment_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Start a sandbox security test."""
+        try:
+            import asyncio
+            from uuid import uuid4
+            from datetime import datetime
+
+            from mass.sandbox.scenario import Scenario, load_builtin_scenario
+            from mass.api.routes.sandbox import (
+                _active_jobs,
+                _save_to_redis,
+                _execute_sandbox,
+                _custom_scenarios_dir,
+            )
+
+            # Resolve scenario
+            scenario = load_builtin_scenario(scenario_name)
+            if not scenario:
+                custom_file = _custom_scenarios_dir() / f"{scenario_name}.yaml"
+                if custom_file.exists():
+                    scenario = Scenario.from_yaml(custom_file)
+
+            if not scenario:
+                return {"error": f"Scenario '{scenario_name}' not found"}
+
+            # Apply overrides
+            scenario.model_provider = model_provider
+            scenario.model_name = model_name
+
+            job_id = str(uuid4())
+            now = datetime.utcnow().isoformat()
+            model_label = f"{model_provider}/{model_name}"
+
+            _active_jobs[job_id] = {
+                "status": "pending",
+                "scenario": scenario,
+                "scan_id": None,
+                "deployment_id": deployment_id,
+                "tenant_id": self.tenant_id,
+                "use_judge": False,
+                "model_label": model_label,
+                "created_at": now,
+            }
+
+            await _save_to_redis(job_id, {
+                "job_id": job_id,
+                "status": "pending",
+                "scenario_name": scenario.name,
+                "model_used": model_label,
+                "provider_used": model_provider,
+                "deployment_id": deployment_id,
+                "turns_total": len(scenario.turns),
+                "created_at": now,
+            })
+
+            # Dispatch background execution
+            asyncio.get_event_loop().create_task(_execute_sandbox(job_id))
+
+            return {
+                "job_id": job_id,
+                "scenario_name": scenario.name,
+                "model": model_label,
+                "turns_total": len(scenario.turns),
+                "status": "pending",
+                "message": f"Sandbox run started: {scenario.name} with {model_label}",
+            }
+        except Exception as exc:
+            logger.warning("start_sandbox_run failed: %s", exc)
+            return {"error": str(exc)}

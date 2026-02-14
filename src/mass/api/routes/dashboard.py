@@ -865,19 +865,10 @@ async def _resolve_deployment_llm(
         model = meta.get("model_name")
         api_key = fallback_api_key
 
-        # For non-Ollama providers, try to get API key from environment
+        # For non-Ollama providers, resolve API key via shared resolver
         if provider != "ollama" and not api_key:
-            key_env_map = {
-                "openai": "OPENAI_API_KEY",
-                "anthropic": "ANTHROPIC_API_KEY",
-                "google": "GOOGLE_API_KEY",
-                "gemini": "GEMINI_API_KEY",
-                "xai": "XAI_API_KEY",
-                "grok": "XAI_API_KEY",
-            }
-            env_name = key_env_map.get(provider, "")
-            if env_name:
-                api_key = os.getenv(env_name) or None
+            from mass.api.utils.llm_config import resolve_api_key
+            api_key = resolve_api_key(provider) or None
 
         return provider, model, api_key
     except Exception:

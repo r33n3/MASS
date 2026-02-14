@@ -15,12 +15,12 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mass.analyzers.code.llm_analyzer import (
-    PROVIDER_DEFAULTS,
     _call_anthropic,
     _call_ollama,
     _call_openai,
     _parse_llm_response,
 )
+from mass.api.utils.llm_config import resolve_llm_config
 from mass.analyzers.context.instruction import InstructionAnalyzer
 from mass.storage.models.deployment import Deployment
 
@@ -136,17 +136,11 @@ async def review_instruction_content(
     Returns:
         Combined review result dict.
     """
-    # Resolve provider configuration
-    defaults = PROVIDER_DEFAULTS.get(provider, PROVIDER_DEFAULTS["ollama"])
-    resolved_model = model or defaults.get("model", "")
-    endpoint = (
-        os.getenv(defaults.get("endpoint_env", ""), "")
-        or defaults.get("endpoint_fallback", "")
-    )
-    resolved_key = (
-        api_key
-        or os.getenv(defaults.get("key_env", ""), "")
-    )
+    # Resolve provider config via shared resolver
+    cfg = resolve_llm_config(provider, model, api_key)
+    resolved_model = cfg.model
+    endpoint = cfg.endpoint
+    resolved_key = cfg.api_key
 
     # Truncate very long content to stay within context limits
     max_chars = 15_000

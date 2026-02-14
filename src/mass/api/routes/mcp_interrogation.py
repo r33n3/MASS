@@ -175,6 +175,22 @@ class MCPFinding(BaseModel):
     )
 
 
+class MCPTestResultEntry(BaseModel):
+    """Single test result for transcript display."""
+    tool_name: str
+    parameter_name: str
+    attack_category: str
+    severity: str
+    payload_description: str
+    arguments_sent: dict[str, Any] = Field(default_factory=dict)
+    success: bool = True
+    passed: bool = True
+    response: Any = None
+    error: str | None = None
+    duration_ms: float = 0.0
+    findings: list[str] = Field(default_factory=list)
+
+
 class MCPInterrogationResponse(BaseModel):
     """Response with interrogation job info."""
     job_id: str
@@ -183,6 +199,9 @@ class MCPInterrogationResponse(BaseModel):
     created_at: str
     started_at: str | None = None
     completed_at: str | None = None
+
+    # Connection config (for re-running)
+    connection: dict[str, Any] | None = None
 
     # Progress
     tools_discovered: int = 0
@@ -195,6 +214,7 @@ class MCPInterrogationResponse(BaseModel):
     tools: list[MCPToolInfo] = Field(default_factory=list)
     findings: list[MCPFinding] = Field(default_factory=list)
     severity_counts: dict[str, int] = Field(default_factory=dict)
+    test_results: list[MCPTestResultEntry] = Field(default_factory=list)
 
     error: str | None = None
 
@@ -527,6 +547,37 @@ def _format_job_response(job: dict[str, Any]) -> MCPInterrogationResponse:
 
         severity_counts = getattr(result, "severity_counts", {})
 
+    # Build test result transcript
+    test_entries: list[MCPTestResultEntry] = []
+    if result:
+        for tr in getattr(result, "test_results", []):
+            tc = tr.test_case
+            tcr = tr.tool_result
+            cat_val = tc.attack_category.value if hasattr(tc.attack_category, "value") else str(tc.attack_category)
+            sev_val = tc.severity.value if hasattr(tc.severity, "value") else str(tc.severity)
+            # Truncate large responses for the transcript
+            resp = tcr.result
+            if isinstance(resp, str) and len(resp) > 500:
+                resp = resp[:500] + "..."
+            test_entries.append(MCPTestResultEntry(
+                tool_name=tc.tool_name,
+                parameter_name=tc.parameter_name,
+                attack_category=cat_val,
+                severity=sev_val,
+                payload_description=tc.description,
+                arguments_sent=tcr.arguments,
+                success=tcr.success,
+                passed=tr.passed,
+                response=resp,
+                error=tcr.error,
+                duration_ms=tcr.duration_ms,
+                findings=tr.findings,
+            ))
+
+    # Extract connection config (strip sensitive headers for re-use)
+    config_data = job.get("config", {})
+    connection_data = config_data.get("connection") if config_data else None
+
     return MCPInterrogationResponse(
         job_id=job["id"],
         name=job["name"],
@@ -534,6 +585,7 @@ def _format_job_response(job: dict[str, Any]) -> MCPInterrogationResponse:
         created_at=job["created_at"],
         started_at=job.get("started_at"),
         completed_at=job.get("completed_at"),
+        connection=connection_data,
         tools_discovered=len(tools),
         total_tests=getattr(result, "total_tests", 0) if result else 0,
         tests_completed=getattr(result, "tests_passed", 0) + getattr(result, "tests_failed", 0) if result else 0,
@@ -542,8 +594,138 @@ def _format_job_response(job: dict[str, Any]) -> MCPInterrogationResponse:
         tools=tools,
         findings=findings,
         severity_counts=severity_counts,
+        test_results=test_entries,
         error=job.get("error"),
     )
+
+
+class MCPTestConnectionRequest(BaseModel):
+    """Request to test MCP server connection and list tools."""
+    connection: MCPConnectionConfig
+
+
+class MCPTestConnectionResponse(BaseModel):
+    """Response from MCP connection test."""
+    connected: bool = False
+    server_info: dict[str, Any] = Field(default_factory=dict)
+    tools: list[MCPToolInfo] = Field(default_factory=list)
+    error: str | None = None
+    duration_ms: float = 0.0
+
+
+@router.post(
+    "/test-connection",
+    response_model=MCPTestConnectionResponse,
+    summary="Test MCP server connection",
+    description="Connect to an MCP server and list its tools without running any attacks.",
+)
+async def test_mcp_connection(
+    request: MCPTestConnectionRequest,
+    tenant: CurrentTenantDep,
+) -> MCPTestConnectionResponse:
+    """Test connection to an MCP server and discover tools."""
+    import time
+
+    from mass.mcp.client import MCPClient, MCPTransport as ClientTransport
+
+    start = time.time()
+    conn = request.connection
+
+    # Validate
+    try:
+        transport = MCPTransport(conn.transport)
+    except ValueError:
+        return MCPTestConnectionResponse(
+            error=f"Invalid transport: {conn.transport}",
+            duration_ms=(time.time() - start) * 1000,
+        )
+
+    if transport in (MCPTransport.HTTP, MCPTransport.SSE) and not conn.url:
+        return MCPTestConnectionResponse(
+            error="Server URL is required for HTTP/SSE transport",
+            duration_ms=(time.time() - start) * 1000,
+        )
+
+    if transport == MCPTransport.STDIO and not conn.command:
+        return MCPTestConnectionResponse(
+            error="Command is required for stdio transport",
+            duration_ms=(time.time() - start) * 1000,
+        )
+
+    client = None
+    try:
+        if transport == MCPTransport.STDIO:
+            client = MCPClient.stdio(
+                command=conn.command or "",
+                args=conn.args,
+                env=conn.env,
+            )
+        elif transport == MCPTransport.HTTP:
+            client = MCPClient.http(
+                base_url=conn.url or "",
+                headers=conn.headers,
+                timeout=conn.timeout,
+            )
+        elif transport == MCPTransport.SSE:
+            client = MCPClient.sse(
+                sse_url=conn.url or "",
+                headers=conn.headers,
+                timeout=conn.timeout,
+            )
+
+        await asyncio.wait_for(client.connect(), timeout=conn.timeout)
+        server_info = await client.get_server_info()
+        raw_tools = await client.list_tools()
+
+        tools = []
+        for t in raw_tools:
+            params = [
+                {
+                    "name": p.name,
+                    "type": p.type,
+                    "description": p.description,
+                    "required": p.required,
+                }
+                for p in t.parameters
+            ]
+            tools.append(MCPToolInfo(
+                name=t.name,
+                description=t.description,
+                parameters=params,
+            ))
+
+        return MCPTestConnectionResponse(
+            connected=True,
+            server_info=server_info,
+            tools=tools,
+            duration_ms=(time.time() - start) * 1000,
+        )
+
+    except asyncio.TimeoutError:
+        return MCPTestConnectionResponse(
+            error=f"Connection timed out after {conn.timeout}s",
+            duration_ms=(time.time() - start) * 1000,
+        )
+    except Exception as e:
+        detail = str(e)
+        if "401" in detail or "Unauthorized" in detail:
+            error_msg = "Authentication failed (401 Unauthorized). Check your API key."
+        elif "403" in detail or "Forbidden" in detail:
+            error_msg = "Access denied (403 Forbidden). Check your API key permissions."
+        elif "Connection" in detail.lower() or "connect" in detail.lower():
+            error_msg = f"Connection failed: {detail}"
+        else:
+            error_msg = f"Error: {detail}"
+        return MCPTestConnectionResponse(
+            error=error_msg,
+            duration_ms=(time.time() - start) * 1000,
+        )
+    finally:
+        if client:
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
 
 
 @router.get(

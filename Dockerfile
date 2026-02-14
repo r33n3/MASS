@@ -7,11 +7,13 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# Install system dependencies
+# Install system dependencies (including Node.js for MCP stdio bridge)
 RUN apt-get update && apt-get install -y \
     gcc \
     git \
     postgresql-client \
+    nodejs \
+    npm \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -24,8 +26,8 @@ FROM base as development
 # Copy requirements and README (needed for package metadata)
 COPY pyproject.toml README.md ./
 
-# Install dependencies (including dev dependencies)
-RUN pip install -e ".[dev]"
+# Install dependencies (including dev dependencies and model providers)
+RUN pip install -e ".[dev,providers]"
 
 # Copy application code
 COPY . .
@@ -44,8 +46,8 @@ FROM base as production
 # Copy requirements and README (needed for package metadata)
 COPY pyproject.toml README.md ./
 
-# Install only production dependencies
-RUN pip install .
+# Install production dependencies with model providers
+RUN pip install ".[providers]"
 
 # Copy application code (exclude dev files)
 COPY src ./src

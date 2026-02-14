@@ -27,26 +27,7 @@ from mass.analyzers.code.models import (
 
 logger = logging.getLogger(__name__)
 
-# Provider defaults — mirrors chat.py pattern
-PROVIDER_DEFAULTS: dict[str, dict[str, str]] = {
-    "ollama": {
-        "model": "hermes3:8b",
-        "endpoint_env": "OLLAMA_HOST",
-        "endpoint_fallback": "http://ollama:11434",
-    },
-    "openai": {
-        "model": "gpt-4o",
-        "endpoint_env": "OPENAI_API_BASE",
-        "endpoint_fallback": "https://api.openai.com/v1",
-        "key_env": "OPENAI_API_KEY",
-    },
-    "anthropic": {
-        "model": "claude-sonnet-4-5-20250929",
-        "endpoint_env": "ANTHROPIC_API_BASE",
-        "endpoint_fallback": "https://api.anthropic.com",
-        "key_env": "ANTHROPIC_API_KEY",
-    },
-}
+from mass.api.utils.llm_config import PROVIDER_DEFAULTS, resolve_llm_config
 
 # LLM timeout for architecture analysis (generous for large batches / reasoning models)
 _TIMEOUT = 300.0
@@ -276,19 +257,14 @@ class CodeArchitectureAnalyzer:
         endpoint: str | None = None,
         api_key: str | None = None,
     ) -> None:
-        self.provider = provider.lower()
-        defaults = PROVIDER_DEFAULTS.get(self.provider, PROVIDER_DEFAULTS["ollama"])
-
-        self.model = model or defaults.get("model", "")
-        self.endpoint = (
-            endpoint
-            or os.getenv(defaults.get("endpoint_env", ""), "")
-            or defaults.get("endpoint_fallback", "")
+        cfg = resolve_llm_config(
+            provider, model, api_key, endpoint,
+            feature_model_override="hermes3:8b",
         )
-        self.api_key = (
-            api_key
-            or os.getenv(defaults.get("key_env", ""), "")
-        )
+        self.provider = cfg.provider
+        self.model = cfg.model
+        self.endpoint = cfg.endpoint
+        self.api_key = cfg.api_key
 
     async def analyze(
         self,

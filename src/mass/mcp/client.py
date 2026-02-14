@@ -448,15 +448,24 @@ class SSETransport(MCPTransportBase):
         """Connect to SSE endpoint and start listening."""
         self._client = httpx.AsyncClient(
             headers=self.headers,
-            timeout=self.timeout,
+            timeout=httpx.Timeout(self.timeout, connect=self.timeout),
         )
+
+        # Event to signal when SSE stream is ready
+        self._sse_ready = asyncio.Event()
 
         # Start SSE listener
         self._sse_task = asyncio.create_task(self._listen_sse())
         self._connected = True
 
-        # Wait a bit for connection to establish
-        await asyncio.sleep(0.5)
+        # Wait for SSE stream to establish (not just a fixed sleep)
+        try:
+            await asyncio.wait_for(self._sse_ready.wait(), timeout=self.timeout)
+        except asyncio.TimeoutError:
+            raise RuntimeError(
+                f"SSE connection timed out after {self.timeout}s. "
+                f"Server may be unreachable or not an SSE MCP endpoint."
+            )
 
         # Initialize
         init_result = await self.send_request("initialize", {
@@ -493,14 +502,41 @@ class SSETransport(MCPTransportBase):
 
         try:
             async with self._client.stream("GET", self.sse_url) as response:
+                response.raise_for_status()
+                # SSE stream connected — signal ready
+                current_event = ""
+                if hasattr(self, '_sse_ready'):
+                    self._sse_ready.set()
+
                 async for line in response.aiter_lines():
-                    if not line or not line.startswith("data:"):
+                    # Handle SSE event type lines
+                    if line.startswith("event:"):
+                        current_event = line[6:].strip()
+                        continue
+
+                    if not line.startswith("data:"):
+                        if line == "":
+                            current_event = ""  # Reset event on blank line
                         continue
 
                     data = line[5:].strip()
                     if not data:
                         continue
 
+                    # Handle MCP SSE protocol "endpoint" event
+                    if current_event == "endpoint":
+                        # Server tells us where to POST messages
+                        endpoint = data
+                        if endpoint.startswith("/"):
+                            # Relative URL — resolve against SSE URL
+                            from urllib.parse import urljoin
+                            endpoint = urljoin(self.sse_url, endpoint)
+                        self.post_url = endpoint
+                        logger.info(f"SSE endpoint set to: {self.post_url}")
+                        current_event = ""
+                        continue
+
+                    # Handle JSON-RPC response
                     try:
                         message = json.loads(data)
                         request_id = message.get("id")
@@ -508,9 +544,18 @@ class SSETransport(MCPTransportBase):
                             self._pending_responses[request_id].set_result(message)
                     except json.JSONDecodeError:
                         logger.warning(f"Invalid SSE JSON: {data}")
+
+                    current_event = ""
+        except httpx.HTTPStatusError as e:
+            logger.error(f"SSE HTTP error: {e.response.status_code} {e}")
+            self._connected = False
+            if hasattr(self, '_sse_ready'):
+                self._sse_ready.set()  # Unblock waiter even on error
         except Exception as e:
             logger.error(f"SSE connection error: {e}")
             self._connected = False
+            if hasattr(self, '_sse_ready'):
+                self._sse_ready.set()  # Unblock waiter even on error
 
     async def send_request(
         self,

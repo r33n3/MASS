@@ -888,11 +888,10 @@ async def profile_target(
                 detail="Target not found",
             )
 
-    # Resolve API key from environment if not provided
+    # Resolve API key via shared resolver if not provided
     if not api_key and provider != "ollama":
-        import os
-        key_envs = {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY"}
-        api_key = os.getenv(key_envs.get(provider, ""), "")
+        from mass.api.utils.llm_config import resolve_api_key
+        api_key = resolve_api_key(provider)
 
     # Run architecture analysis
     arch_map = await analyze_target_architecture(
@@ -950,11 +949,10 @@ async def review_instructions(
             detail="No instruction content found. Provide inline content, system prompt, or a source file path.",
         )
 
-    # Resolve API key from environment if not provided
+    # Resolve API key via shared resolver if not provided
     if not api_key and provider != "ollama":
-        import os
-        key_envs = {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY"}
-        api_key = os.getenv(key_envs.get(provider, ""), "")
+        from mass.api.utils.llm_config import resolve_api_key
+        api_key = resolve_api_key(provider)
 
     # Run LLM review
     await review_instruction_content(
