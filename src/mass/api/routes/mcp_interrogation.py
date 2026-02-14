@@ -609,6 +609,7 @@ class MCPTestConnectionResponse(BaseModel):
     connected: bool = False
     server_info: dict[str, Any] = Field(default_factory=dict)
     tools: list[MCPToolInfo] = Field(default_factory=list)
+    transport_used: str | None = None
     error: str | None = None
     duration_ms: float = 0.0
 
@@ -653,6 +654,7 @@ async def test_mcp_connection(
         )
 
     client = None
+    used_transport = transport.value
     try:
         if transport == MCPTransport.STDIO:
             client = MCPClient.stdio(
@@ -660,20 +662,58 @@ async def test_mcp_connection(
                 args=conn.args,
                 env=conn.env,
             )
-        elif transport == MCPTransport.HTTP:
-            client = MCPClient.http(
-                base_url=conn.url or "",
-                headers=conn.headers,
-                timeout=conn.timeout,
-            )
-        elif transport == MCPTransport.SSE:
-            client = MCPClient.sse(
-                sse_url=conn.url or "",
-                headers=conn.headers,
-                timeout=conn.timeout,
-            )
+            await asyncio.wait_for(client.connect(), timeout=conn.timeout)
+        elif transport in (MCPTransport.HTTP, MCPTransport.SSE):
+            # Try primary, auto-fallback to alternate transport
+            url = conn.url or ""
+            primary = transport
+            fallback = MCPTransport.HTTP if transport == MCPTransport.SSE else MCPTransport.SSE
 
-        await asyncio.wait_for(client.connect(), timeout=conn.timeout)
+            try:
+                client = (
+                    MCPClient.sse(sse_url=url, headers=conn.headers, timeout=conn.timeout)
+                    if primary == MCPTransport.SSE
+                    else MCPClient.http(base_url=url, headers=conn.headers, timeout=conn.timeout)
+                )
+                await asyncio.wait_for(client.connect(), timeout=conn.timeout)
+                used_transport = primary.value
+            except Exception as primary_err:
+                # Cleanup
+                if client:
+                    try:
+                        await client.disconnect()
+                    except Exception:
+                        pass
+
+                # Adjust URL for fallback: /sse ↔ /mcp
+                fallback_url = url
+                if fallback == MCPTransport.SSE:
+                    if url.endswith("/mcp"):
+                        fallback_url = url[:-4] + "/sse"
+                    elif not url.endswith("/sse"):
+                        fallback_url = url.rstrip("/") + "/sse"
+                else:
+                    if url.endswith("/sse"):
+                        fallback_url = url[:-4] + "/mcp"
+                    elif not url.endswith("/mcp"):
+                        fallback_url = url.rstrip("/") + "/mcp"
+
+                try:
+                    client = (
+                        MCPClient.sse(sse_url=fallback_url, headers=conn.headers, timeout=conn.timeout)
+                        if fallback == MCPTransport.SSE
+                        else MCPClient.http(base_url=fallback_url, headers=conn.headers, timeout=conn.timeout)
+                    )
+                    await asyncio.wait_for(client.connect(), timeout=conn.timeout)
+                    used_transport = f"{fallback.value} (fallback)"
+                except Exception:
+                    raise RuntimeError(
+                        f"Both transports failed for {url}.\n"
+                        f"  {primary.value}: {primary_err}\n"
+                        f"  {fallback.value} ({fallback_url}): server unreachable.\n"
+                        f"The MCP server may be down."
+                    )
+
         server_info = await client.get_server_info()
         raw_tools = await client.list_tools()
 
@@ -698,6 +738,7 @@ async def test_mcp_connection(
             connected=True,
             server_info=server_info,
             tools=tools,
+            transport_used=used_transport,
             duration_ms=(time.time() - start) * 1000,
         )
 

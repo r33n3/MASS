@@ -202,31 +202,85 @@ class MCPInterrogator:
         self._cancelled = True
 
     async def _connect(self) -> None:
-        """Connect to the MCP server."""
-        logger.info(f"Connecting to MCP server via {self.config.transport}")
+        """Connect to the MCP server with transport auto-fallback."""
+        transport = self.config.transport
+        logger.info(f"Connecting to MCP server via {transport}")
 
-        if self.config.transport == MCPTransport.STDIO:
+        if transport == MCPTransport.STDIO:
             self._client = MCPClient.stdio(
                 command=self.config.command,
                 args=self.config.args,
                 env=self.config.env,
             )
-        elif self.config.transport == MCPTransport.HTTP:
-            self._client = MCPClient.http(
-                base_url=self.config.url,
+            await self._client.connect()
+        elif transport in (MCPTransport.HTTP, MCPTransport.SSE):
+            # Try primary transport, auto-fallback to the other on failure
+            primary = transport
+            fallback = MCPTransport.HTTP if transport == MCPTransport.SSE else MCPTransport.SSE
+            url = self.config.url
+
+            try:
+                self._client = self._create_http_client(primary, url)
+                await self._client.connect()
+                logger.info(f"Connected via {primary.value} transport")
+            except Exception as primary_err:
+                logger.warning(
+                    f"{primary.value} transport failed ({primary_err}), "
+                    f"trying {fallback.value} fallback..."
+                )
+                # Cleanup failed client
+                try:
+                    await self._client.disconnect()
+                except Exception:
+                    pass
+
+                # Adjust URL for fallback: /sse ↔ /mcp
+                fallback_url = self._adjust_url_for_transport(url, fallback)
+
+                try:
+                    self._client = self._create_http_client(fallback, fallback_url)
+                    await self._client.connect()
+                    logger.info(f"Connected via {fallback.value} fallback transport")
+                except Exception as fallback_err:
+                    raise RuntimeError(
+                        f"Both transports failed for {url}.\n"
+                        f"  {primary.value}: {primary_err}\n"
+                        f"  {fallback.value} ({fallback_url}): {fallback_err}\n"
+                        f"The MCP server may be down or unreachable."
+                    )
+
+        self._result.server_info = await self._client.get_server_info()
+        logger.info(f"Connected to MCP server: {self._result.server_info}")
+
+    def _create_http_client(self, transport: MCPTransport, url: str) -> MCPClient:
+        """Create an MCPClient for the given HTTP-based transport."""
+        if transport == MCPTransport.SSE:
+            return MCPClient.sse(
+                sse_url=url,
                 headers=self.config.headers,
                 timeout=self.config.timeout,
             )
-        elif self.config.transport == MCPTransport.SSE:
-            self._client = MCPClient.sse(
-                sse_url=self.config.url,
+        else:
+            return MCPClient.http(
+                base_url=url,
                 headers=self.config.headers,
                 timeout=self.config.timeout,
             )
 
-        await self._client.connect()
-        self._result.server_info = await self._client.get_server_info()
-        logger.info(f"Connected to MCP server: {self._result.server_info}")
+    @staticmethod
+    def _adjust_url_for_transport(url: str, target: MCPTransport) -> str:
+        """Adjust URL path for the target transport (sse ↔ http/mcp)."""
+        if target == MCPTransport.SSE:
+            if url.endswith("/mcp"):
+                return url[:-4] + "/sse"
+            if not url.endswith("/sse"):
+                return url.rstrip("/") + "/sse"
+        else:  # HTTP
+            if url.endswith("/sse"):
+                return url[:-4] + "/mcp"
+            if not url.endswith("/mcp"):
+                return url.rstrip("/") + "/mcp"
+        return url
 
     async def _disconnect(self) -> None:
         """Disconnect from the MCP server."""

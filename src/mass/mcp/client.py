@@ -455,6 +455,7 @@ class SSETransport(MCPTransportBase):
         self._sse_ready = asyncio.Event()
 
         # Start SSE listener
+        self._connect_error = None
         self._sse_task = asyncio.create_task(self._listen_sse())
         self._connected = True
 
@@ -466,6 +467,18 @@ class SSETransport(MCPTransportBase):
                 f"SSE connection timed out after {self.timeout}s. "
                 f"Server may be unreachable or not an SSE MCP endpoint."
             )
+
+        # Check if SSE stream failed during connection
+        if self._connect_error:
+            err = self._connect_error
+            if isinstance(err, httpx.HTTPStatusError):
+                status_code = err.response.status_code
+                raise RuntimeError(
+                    f"SSE endpoint returned HTTP {status_code}. "
+                    f"Server may use HTTP streaming transport instead of SSE. "
+                    f"Try switching to 'http' transport."
+                )
+            raise RuntimeError(f"SSE connection failed: {err}")
 
         # Initialize
         init_result = await self.send_request("initialize", {
@@ -549,11 +562,13 @@ class SSETransport(MCPTransportBase):
         except httpx.HTTPStatusError as e:
             logger.error(f"SSE HTTP error: {e.response.status_code} {e}")
             self._connected = False
+            self._connect_error = e
             if hasattr(self, '_sse_ready'):
                 self._sse_ready.set()  # Unblock waiter even on error
         except Exception as e:
             logger.error(f"SSE connection error: {e}")
             self._connected = False
+            self._connect_error = e
             if hasattr(self, '_sse_ready'):
                 self._sse_ready.set()  # Unblock waiter even on error
 

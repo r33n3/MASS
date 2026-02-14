@@ -13815,7 +13815,8 @@
                     const serverVer = data.server_info?.serverInfo?.version || data.server_info?.version || '';
                     resultDiv.style.background = 'rgba(16,185,129,0.1)';
                     resultDiv.style.color = 'var(--success)';
-                    let html = `<strong>Connected</strong> to ${escapeHtml(serverName)} ${escapeHtml(serverVer)} — ${toolCount} tools discovered (${data.duration_ms.toFixed(0)}ms)`;
+                    const transportInfo = data.transport_used ? ` via ${escapeHtml(data.transport_used)}` : '';
+                    let html = `<strong>Connected</strong> to ${escapeHtml(serverName)} ${escapeHtml(serverVer)}${transportInfo} — ${toolCount} tools discovered (${data.duration_ms.toFixed(0)}ms)`;
                     if (toolCount > 0) {
                         html += '<div style="margin-top:0.3rem;font-size:0.65rem;color:var(--text-secondary);">';
                         data.tools.forEach(t => {
@@ -13828,8 +13829,13 @@
                 } else {
                     resultDiv.style.background = 'rgba(239,68,68,0.1)';
                     resultDiv.style.color = 'var(--danger)';
-                    resultDiv.innerHTML = `<strong>Failed:</strong> ${escapeHtml(data.error || 'Unknown error')}`;
-                    showToast(data.error || 'Connection failed', 'error');
+                    var errMsg = data.error || 'Unknown error';
+                    var errHtml = `<strong>Failed:</strong> ${escapeHtml(errMsg)}`;
+                    if (errMsg.includes('Both transports failed') || errMsg.includes('404') || errMsg.includes('500')) {
+                        errHtml += '<div style="font-size:0.6rem;color:var(--text-muted);margin-top:0.2rem;">Tip: The MCP server may be down or using a different URL. Both SSE and HTTP transports were tried automatically.</div>';
+                    }
+                    resultDiv.innerHTML = errHtml;
+                    showToast(errMsg.split('\n')[0] || 'Connection failed', 'error');
                 }
             } catch(e) {
                 resultDiv.style.background = 'rgba(239,68,68,0.1)';
