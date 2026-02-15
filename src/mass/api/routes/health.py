@@ -1,6 +1,8 @@
 """Health check endpoints.
 
-Provides liveness, readiness, and metrics endpoints for orchestration.
+Provides liveness, readiness, and detailed health endpoints for
+orchestrators, load balancers, and operators.  Per ARCHITECTURE.md
+Section 7.2.
 """
 
 import time
@@ -21,6 +23,7 @@ class HealthResponse(BaseModel):
     status: str = Field(..., description="Health status: healthy, degraded, unhealthy")
     version: str = Field(..., description="Application version")
     uptime_seconds: float = Field(..., description="Uptime in seconds")
+    checks: dict[str, Any] | None = None
 
 
 class ReadinessResponse(BaseModel):
@@ -30,23 +33,54 @@ class ReadinessResponse(BaseModel):
     checks: dict[str, bool] = Field(..., description="Individual check results")
 
 
-class ComponentHealth(BaseModel):
-    """Health status of a component."""
+# ---------------------------------------------------------------------------
+# Subsystem health probes
+# ---------------------------------------------------------------------------
 
-    name: str
-    status: str
-    latency_ms: float | None = None
-    message: str | None = None
+async def _check_database() -> dict[str, Any]:
+    """Ping PostgreSQL and measure latency."""
+    try:
+        from sqlalchemy import text
+        from mass.storage.database import get_session
+
+        start = time.perf_counter()
+        async with get_session() as session:
+            await session.execute(text("SELECT 1"))
+        latency_ms = round((time.perf_counter() - start) * 1000, 1)
+        return {"status": "healthy", "latency_ms": latency_ms}
+    except Exception as e:
+        return {"status": "unhealthy", "error": str(e)[:200]}
 
 
-class DetailedHealthResponse(BaseModel):
-    """Detailed health check response."""
+async def _check_redis() -> dict[str, Any]:
+    """Ping Redis and measure latency."""
+    try:
+        from mass.storage.cache import get_redis
 
-    status: str = Field(..., description="Overall health status")
-    version: str = Field(..., description="Application version")
-    uptime_seconds: float = Field(..., description="Uptime in seconds")
-    components: list[ComponentHealth] = Field(..., description="Component health status")
+        start = time.perf_counter()
+        redis = await get_redis()
+        await redis.ping()
+        latency_ms = round((time.perf_counter() - start) * 1000, 1)
+        return {"status": "healthy", "latency_ms": latency_ms}
+    except Exception as e:
+        return {"status": "unhealthy", "error": str(e)[:200]}
 
+
+async def _check_queue() -> dict[str, Any]:
+    """Check scan queue depth in Redis."""
+    try:
+        from mass.storage.cache import get_redis
+
+        redis = await get_redis()
+        depth = await redis.llen("mass:jobs:queue:scans") or 0
+        return {"status": "healthy", "depth": depth}
+    except Exception as e:
+        return {"status": "degraded", "error": str(e)[:200]}
+
+
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
 
 @router.get(
     "/health",
@@ -55,14 +89,14 @@ class DetailedHealthResponse(BaseModel):
     description="Returns basic health status for liveness probes.",
 )
 async def health_check() -> HealthResponse:
-    """Basic health check endpoint.
+    """Basic health check — always returns fast.
 
-    Used by load balancers and orchestrators to verify the service is alive.
+    Used by load balancers to verify the process is alive.
     """
     return HealthResponse(
         status="healthy",
         version="0.1.0",
-        uptime_seconds=time.time() - _startup_time,
+        uptime_seconds=round(time.time() - _startup_time, 1),
     )
 
 
@@ -70,113 +104,55 @@ async def health_check() -> HealthResponse:
     "/ready",
     response_model=ReadinessResponse,
     summary="Readiness check",
-    description="Returns readiness status with dependency checks.",
+    description="Returns readiness status with actual dependency checks.",
 )
 async def readiness_check() -> ReadinessResponse:
-    """Readiness check endpoint.
+    """Readiness check — verifies critical dependencies are reachable."""
+    db = await _check_database()
+    redis = await _check_redis()
 
-    Verifies that all dependencies are available and the service
-    can handle requests.
-    """
-    checks = {}
+    checks = {
+        "database": db["status"] == "healthy",
+        "redis": redis["status"] == "healthy",
+    }
 
-    # Check database connection
-    try:
-        # TODO: Actually ping database
-        checks["database"] = True
-    except Exception:
-        checks["database"] = False
-
-    # Check Redis connection
-    try:
-        # TODO: Actually ping Redis
-        checks["redis"] = True
-    except Exception:
-        checks["redis"] = False
-
-    # Check queue connection
-    try:
-        # TODO: Actually check queue
-        checks["queue"] = True
-    except Exception:
-        checks["queue"] = False
-
-    # Service is ready if all critical checks pass
-    ready = checks.get("database", False) and checks.get("redis", False)
-
+    ready = all(checks.values())
     return ReadinessResponse(ready=ready, checks=checks)
 
 
 @router.get(
     "/health/detailed",
-    response_model=DetailedHealthResponse,
     summary="Detailed health check",
-    description="Returns detailed health status with component information.",
+    description="Returns detailed health status with latency and queue depth.",
 )
-async def detailed_health_check() -> DetailedHealthResponse:
-    """Detailed health check with component status.
+async def detailed_health_check() -> dict:
+    """Detailed health check per ARCHITECTURE.md Section 7.2.
 
-    Provides more information about individual components for debugging.
+    Returns status, latency, and queue depth for each subsystem.
     """
-    components = []
-
-    # Check database
-    try:
-        start = time.perf_counter()
-        # TODO: Actually ping database
-        latency = (time.perf_counter() - start) * 1000
-        components.append(
-            ComponentHealth(
-                name="database",
-                status="healthy",
-                latency_ms=latency,
-            )
-        )
-    except Exception as e:
-        components.append(
-            ComponentHealth(
-                name="database",
-                status="unhealthy",
-                message=str(e),
-            )
-        )
-
-    # Check Redis
-    try:
-        start = time.perf_counter()
-        # TODO: Actually ping Redis
-        latency = (time.perf_counter() - start) * 1000
-        components.append(
-            ComponentHealth(
-                name="redis",
-                status="healthy",
-                latency_ms=latency,
-            )
-        )
-    except Exception as e:
-        components.append(
-            ComponentHealth(
-                name="redis",
-                status="unhealthy",
-                message=str(e),
-            )
-        )
+    db = await _check_database()
+    redis = await _check_redis()
+    queue = await _check_queue()
 
     # Determine overall status
-    statuses = [c.status for c in components]
+    statuses = [db["status"], redis["status"]]
     if all(s == "healthy" for s in statuses):
-        overall_status = "healthy"
+        overall = "healthy"
     elif any(s == "unhealthy" for s in statuses):
-        overall_status = "unhealthy"
+        overall = "unhealthy"
     else:
-        overall_status = "degraded"
+        overall = "degraded"
 
-    return DetailedHealthResponse(
-        status=overall_status,
-        version="0.1.0",
-        uptime_seconds=time.time() - _startup_time,
-        components=components,
-    )
+    return {
+        "status": overall,
+        "version": "0.1.0",
+        "uptime_seconds": round(time.time() - _startup_time, 1),
+        "checks": {
+            "database": db,
+            "redis": redis,
+            "queue": queue,
+        },
+    }
 
 
 @router.get(
@@ -189,22 +165,10 @@ async def metrics() -> Response:
 
     Returns metrics in Prometheus exposition format.
     """
-    # TODO: Implement actual metrics collection with prometheus_client
+    # TODO: P2.3 will add real prometheus_client metrics
     metrics_text = f"""# HELP mass_uptime_seconds Time since service started
 # TYPE mass_uptime_seconds gauge
 mass_uptime_seconds {time.time() - _startup_time}
-
-# HELP mass_requests_total Total number of requests
-# TYPE mass_requests_total counter
-mass_requests_total 0
-
-# HELP mass_scans_total Total number of scans
-# TYPE mass_scans_total counter
-mass_scans_total 0
-
-# HELP mass_findings_total Total number of findings
-# TYPE mass_findings_total counter
-mass_findings_total 0
 """
 
     return Response(

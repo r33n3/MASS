@@ -1,8 +1,8 @@
 # Architecture Implementation Progress
 
 ## Current Phase: Phase 2 — Observability
-## Current Item: P2.2 — Health check enhancement
-## Overall: 9/19 items complete — Phase 1 COMPLETE
+## Current Item: P2.3 — Metrics foundation
+## Overall: 10/19 items complete — Phase 1 COMPLETE
 
 ### Completed Items
 - [x] P1.1 — Docker Compose resource limits — Date: 2026-02-15
@@ -61,8 +61,18 @@
   - Called from app lifespan startup — applies to all existing `logging.getLogger()` calls
   - Verified: structured fields (client_ip, method, path, status_code, duration_ms) appear in logs
 
+- [x] P2.2 — Health check enhancement — Date: 2026-02-15
+  - Replaced TODO stubs with real subsystem probes:
+    - Database: actual `SELECT 1` via SQLAlchemy async session with latency measurement
+    - Redis: actual `PING` via aioredis with latency measurement
+    - Queue: `LLEN` on scan queue for depth reporting
+  - `/health` — fast liveness probe (no dependency checks)
+  - `/ready` — readiness check with real DB + Redis pings
+  - `/health/detailed` — full subsystem status with latency_ms and queue depth
+  - Verified: DB 2.3ms, Redis 0.6ms, queue depth 0 — all healthy
+
 ### In Progress
-- [ ] P2.2 — Health check enhancement
+- [ ] P2.3 — Metrics foundation
 
 ### Remaining Items
 
@@ -78,7 +88,7 @@
 
 **Phase 2: Observability**
 - [x] P2.1 — Structured logging (structlog)
-- [ ] P2.2 — Health check enhancement
+- [x] P2.2 — Health check enhancement
 - [ ] P2.3 — Metrics foundation
 
 **Phase 3: Future Modules**
