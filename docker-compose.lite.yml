@@ -36,6 +36,14 @@ services:
       - ./src:/app/src
       - ./tests:/app/tests
       - ./data:/app/data
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
     command: >
       sh -c "
         echo 'Creating data directory...' &&
