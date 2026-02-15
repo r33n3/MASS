@@ -1181,7 +1181,6 @@ class ToolExecutor:
 
             from mass.sandbox.scenario import Scenario, load_builtin_scenario
             from mass.api.routes.sandbox import (
-                _active_jobs,
                 _save_to_redis,
                 _execute_sandbox,
                 _custom_scenarios_dir,
@@ -1205,30 +1204,22 @@ class ToolExecutor:
             now = datetime.utcnow().isoformat()
             model_label = f"{model_provider}/{model_name}"
 
-            _active_jobs[job_id] = {
-                "status": "pending",
-                "scenario": scenario,
-                "scan_id": None,
-                "deployment_id": deployment_id,
-                "tenant_id": self.tenant_id,
-                "use_judge": False,
-                "model_label": model_label,
-                "created_at": now,
-            }
-
             await _save_to_redis(job_id, {
                 "job_id": job_id,
                 "status": "pending",
                 "scenario_name": scenario.name,
+                "scenario_dict": scenario.to_dict(),
                 "model_used": model_label,
                 "provider_used": model_provider,
                 "deployment_id": deployment_id,
+                "tenant_id": self.tenant_id,
+                "use_judge": False,
                 "turns_total": len(scenario.turns),
                 "created_at": now,
             })
 
             # Dispatch background execution
-            asyncio.get_event_loop().create_task(_execute_sandbox(job_id))
+            asyncio.get_event_loop().create_task(_execute_sandbox(job_id, scenario))
 
             return {
                 "job_id": job_id,

@@ -17,13 +17,14 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, status
 from pydantic import BaseModel, Field
 
 from mass.api.dependencies import CurrentTenantDep
+from mass.api.utils.job_store import JobStore
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# In-memory job storage (same pattern as mcp_interrogation.py)
-_audit_jobs: dict[str, dict[str, Any]] = {}
+# Redis-backed job storage (per ARCHITECTURE.md Rule 1)
+_store = JobStore("audit")
 
 
 # ── Schemas ────────────────────────────────────────────────────────────
@@ -235,7 +236,7 @@ async def start_mcp_audit(
         "sandbox_job_ids": [],
         "proposals_count": 0,
     }
-    _audit_jobs[audit_id] = job
+    await _store.save(audit_id, job)
 
     # Start background task
     background_tasks.add_task(_run_audit, audit_id)
@@ -253,12 +254,8 @@ async def list_audit_jobs(
     limit: int = 50,
 ) -> list[MCPAuditResponse]:
     """List all audit jobs for the tenant."""
-    jobs = [
-        j for j in _audit_jobs.values()
-        if j.get("tenant_id") == tenant.tenant_id
-    ]
-    jobs.sort(key=lambda j: j.get("created_at", ""), reverse=True)
-    return [_format_audit_response(j) for j in jobs[:limit]]
+    jobs = await _store.list_jobs(tenant_id=tenant.tenant_id, limit=limit)
+    return [_format_audit_response(j) for j in jobs]
 
 
 @router.get(
@@ -271,7 +268,7 @@ async def get_audit_job(
     tenant: CurrentTenantDep,
 ) -> MCPAuditResponse:
     """Get details and results of an MCP audit job."""
-    job = _audit_jobs.get(audit_id)
+    job = await _store.load(audit_id)
     if not job or job.get("tenant_id") != tenant.tenant_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -290,7 +287,7 @@ async def cancel_audit_job(
     tenant: CurrentTenantDep,
 ) -> None:
     """Cancel a running audit and clean up its container."""
-    job = _audit_jobs.get(audit_id)
+    job = await _store.load(audit_id)
     if not job or job.get("tenant_id") != tenant.tenant_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -303,14 +300,7 @@ async def cancel_audit_job(
     job["status"] = "failed"
     job["error"] = "Cancelled by user"
     job["completed_at"] = datetime.utcnow().isoformat()
-
-    # Try to clean up the container
-    container = job.get("_container")
-    if container:
-        try:
-            await container.stop()
-        except Exception as e:
-            logger.warning("Failed to stop container for cancelled audit %s: %s", audit_id, e)
+    await _store.save(audit_id, job)
 
 
 @router.get(
@@ -347,7 +337,7 @@ async def _run_audit(audit_id: str) -> None:
     from mass.mcp.client import MCPTransport
     from mass.mcp.tool_tester import AttackCategory
 
-    job = _audit_jobs.get(audit_id)
+    job = await _store.load(audit_id)
     if not job:
         return
 
@@ -359,7 +349,8 @@ async def _run_audit(audit_id: str) -> None:
         job["phase"] = "container_setup"
         job["phase_detail"] = "Creating container..."
         job["started_at"] = datetime.utcnow().isoformat()
-        await _broadcast_audit_update(audit_id)
+        await _store.save(audit_id, job)
+        await _broadcast_audit_update(audit_id, job)
 
         # ── Phase 1: Start container ───────────────────────────────
         container = MCPAuditContainer(
@@ -371,10 +362,8 @@ async def _run_audit(audit_id: str) -> None:
             args=config.get("args", []),
             allow_network=config.get("allow_network", True),
         )
-        job["_container"] = container
-
         job["phase_detail"] = "Installing package and starting MCP server..."
-        await _broadcast_audit_update(audit_id)
+        await _broadcast_audit_update(audit_id, job)
 
         base_url = await asyncio.wait_for(
             container.start(),
@@ -384,7 +373,7 @@ async def _run_audit(audit_id: str) -> None:
         job["phase"] = "interrogation"
         job["phase_detail"] = "Connecting to MCP server..."
         job["status"] = "interrogating"
-        await _broadcast_audit_update(audit_id)
+        await _broadcast_audit_update(audit_id, job)
 
         # ── Phase 2: Run interrogation ─────────────────────────────
         # Parse attack categories
@@ -410,26 +399,25 @@ async def _run_audit(audit_id: str) -> None:
         interrogator = MCPInterrogator(interrogation_config)
 
         job["phase_detail"] = "Enumerating tools and running security tests..."
-        await _broadcast_audit_update(audit_id)
+        await _broadcast_audit_update(audit_id, job)
 
         result = await asyncio.wait_for(
             interrogator.run(),
             timeout=config.get("timeout", 600),
         )
 
-        # Store results
-        job["result"] = result
+        # Serialize results into job dict for Redis storage
         _populate_job_from_result(job, result)
 
         job["phase_detail"] = f"Interrogation complete: {len(result.findings)} findings"
-        await _broadcast_audit_update(audit_id)
+        await _broadcast_audit_update(audit_id, job)
 
         # ── Phase 3 (optional): Sandbox scenarios ──────────────────
         if config.get("run_sandbox_scenarios") and result.tools_discovered:
             job["phase"] = "scenarios"
             job["status"] = "scenarios"
             job["phase_detail"] = "Generating and running sandbox scenarios..."
-            await _broadcast_audit_update(audit_id)
+            await _broadcast_audit_update(audit_id, job)
 
             try:
                 sandbox_ids, proposal_count = await _run_sandbox_phase(
@@ -444,7 +432,7 @@ async def _run_audit(audit_id: str) -> None:
         # ── Phase 4: Cleanup ───────────────────────────────────────
         job["phase"] = "cleanup"
         job["phase_detail"] = "Tearing down container..."
-        await _broadcast_audit_update(audit_id)
+        await _broadcast_audit_update(audit_id, job)
 
         # Get logs before stopping
         job["container_logs"] = await container.get_logs(tail=100)
@@ -482,9 +470,9 @@ async def _run_audit(audit_id: str) -> None:
                 await container.stop()
             except Exception as e:
                 logger.warning("Cleanup failed for audit %s: %s", audit_id, e)
-            job["_container"] = None
+            pass  # container cleaned up
 
-        await _broadcast_audit_update(audit_id)
+        await _broadcast_audit_update(audit_id, job)
 
 
 async def _run_sandbox_phase(
@@ -541,28 +529,23 @@ async def _run_sandbox_phase(
         scenario.mcp_url = base_url
 
     # Create sandbox jobs (reuse sandbox route pattern)
-    from mass.api.routes.sandbox import _active_jobs, _save_to_redis, _execute_sandbox
+    from mass.api.routes.sandbox import _execute_sandbox, _sandbox_store
 
     sandbox_ids: list[str] = []
     for scenario in scenarios[:10]:  # Cap at 10 scenarios
         job_id = str(uuid4())
         now = datetime.utcnow().isoformat()
 
-        _active_jobs[job_id] = {
-            "scenario": scenario,
-            "status": "pending",
-            "created_at": now,
-            "tenant_id": job.get("tenant_id"),
-            "use_judge": False,
-        }
-
-        await _save_to_redis(job_id, {
+        await _sandbox_store.save(job_id, {
             "job_id": job_id,
             "status": "pending",
             "scenario_name": scenario.name,
+            "scenario_dict": scenario.to_dict() if hasattr(scenario, "to_dict") else {},
             "model_used": f"{scenario.model_provider}/{scenario.model_name}",
             "provider_used": scenario.model_provider,
             "turns_total": len(scenario.turns),
+            "tenant_id": job.get("tenant_id"),
+            "use_judge": False,
             "created_at": now,
             "audit_id": audit_id,
         })
@@ -684,11 +667,14 @@ def _format_audit_response(job: dict[str, Any]) -> MCPAuditResponse:
 # ── WebSocket broadcast ───────────────────────────────────────────────
 
 
-async def _broadcast_audit_update(audit_id: str) -> None:
-    """Broadcast audit status via WebSocket."""
-    job = _audit_jobs.get(audit_id)
+async def _broadcast_audit_update(audit_id: str, job: dict[str, Any] | None = None) -> None:
+    """Save job to Redis and broadcast status via WebSocket."""
+    if job is None:
+        job = await _store.load(audit_id)
     if not job:
         return
+    # Always persist to Redis on broadcast
+    await _store.save(audit_id, job)
     try:
         from mass.dashboard.websocket import manager
 

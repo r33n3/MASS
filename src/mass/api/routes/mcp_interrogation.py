@@ -16,6 +16,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, status
 from pydantic import BaseModel, Field
 
 from mass.api.dependencies import CurrentTenantDep
+from mass.api.utils.job_store import JobStore
 from mass.mcp import (
     MCPTransport,
     InterrogationConfig,
@@ -28,8 +29,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# In-memory job storage (would use database in production)
-_jobs: dict[str, dict[str, Any]] = {}
+# Redis-backed job storage (per ARCHITECTURE.md Rule 1)
+_store = JobStore("interrogation")
 
 
 class MCPConnectionConfig(BaseModel):
@@ -278,10 +279,17 @@ async def start_mcp_interrogation(
         "started_at": None,
         "completed_at": None,
         "config": request.model_dump(),
-        "result": None,
         "error": None,
+        # Pre-initialize result fields
+        "tools": [],
+        "findings": [],
+        "severity_counts": {},
+        "test_results": [],
+        "total_tests": 0,
+        "tests_passed": 0,
+        "tests_failed": 0,
     }
-    _jobs[job_id] = job
+    await _store.save(job_id, job)
 
     # Build interrogation config
     config = InterrogationConfig(
@@ -320,15 +328,16 @@ _INTERROGATION_TIMEOUT = 600  # 10 minutes
 
 async def _run_interrogation(job_id: str, config: InterrogationConfig) -> None:
     """Run interrogation in background with timeout protection."""
-    job = _jobs.get(job_id)
+    job = await _store.load(job_id)
     if not job:
         return
 
     job["status"] = InterrogationStatus.CONNECTING.value
     job["started_at"] = datetime.utcnow().isoformat()
+    await _store.save(job_id, job)
 
     # Broadcast job started
-    await _broadcast_job_status(job_id)
+    await _broadcast_job_status(job_id, job)
 
     try:
         result = await asyncio.wait_for(
@@ -338,8 +347,10 @@ async def _run_interrogation(job_id: str, config: InterrogationConfig) -> None:
 
         job["status"] = result.status.value
         job["completed_at"] = datetime.utcnow().isoformat()
-        job["result"] = result
         job["error"] = result.error
+
+        # Serialize result into job dict for Redis storage
+        _populate_job_from_result(job, result)
 
     except asyncio.TimeoutError:
         logger.warning("Interrogation %s timed out after %ds", job_id, _INTERROGATION_TIMEOUT)
@@ -353,19 +364,20 @@ async def _run_interrogation(job_id: str, config: InterrogationConfig) -> None:
         job["completed_at"] = datetime.utcnow().isoformat()
         job["error"] = str(e)
 
-    # Broadcast final status
-    await _broadcast_job_status(job_id)
+    # Final save and broadcast
+    await _store.save(job_id, job)
+    await _broadcast_job_status(job_id, job)
 
 
-async def _broadcast_job_status(job_id: str) -> None:
+async def _broadcast_job_status(job_id: str, job: dict[str, Any] | None = None) -> None:
     """Broadcast current interrogation job status via WebSocket."""
-    job = _jobs.get(job_id)
+    if job is None:
+        job = await _store.load(job_id)
     if not job:
         return
     try:
         from mass.dashboard.websocket import broadcast_interrogation_update
 
-        result = job.get("result")
         cfg = job.get("config", {})
         name = cfg.get("name", job.get("name", ""))
 
@@ -380,8 +392,8 @@ async def _broadcast_job_status(job_id: str) -> None:
             job_id=job_id,
             status=job["status"],
             message=name,
-            strategies_run=getattr(result, "total_tests", 0) if result else 0,
-            successful_attacks=len(getattr(result, "findings", [])) if result else 0,
+            strategies_run=job.get("total_tests", 0),
+            successful_attacks=len(job.get("findings", [])),
             duration_seconds=duration,
         )
     except Exception:
@@ -399,17 +411,10 @@ async def list_interrogation_jobs(
     limit: int = 50,
 ) -> list[MCPInterrogationResponse]:
     """List MCP interrogation jobs for the tenant."""
-    jobs = [
-        j for j in _jobs.values()
-        if j.get("tenant_id") == tenant.tenant_id
-    ]
+    jobs = await _store.list_jobs(tenant_id=tenant.tenant_id, limit=limit)
 
     if status:
         jobs = [j for j in jobs if j.get("status") == status]
-
-    # Sort by created_at descending
-    jobs.sort(key=lambda j: j.get("created_at", ""), reverse=True)
-    jobs = jobs[:limit]
 
     return [_format_job_response(j) for j in jobs]
 
@@ -424,7 +429,7 @@ async def get_interrogation_job(
     tenant: CurrentTenantDep,
 ) -> MCPInterrogationResponse:
     """Get details of an MCP interrogation job."""
-    job = _jobs.get(job_id)
+    job = await _store.load(job_id)
 
     if not job or job.get("tenant_id") != tenant.tenant_id:
         raise HTTPException(
@@ -445,7 +450,7 @@ async def cancel_interrogation_job(
     tenant: CurrentTenantDep,
 ) -> None:
     """Cancel a running interrogation job."""
-    job = _jobs.get(job_id)
+    job = await _store.load(job_id)
 
     if not job or job.get("tenant_id") != tenant.tenant_id:
         raise HTTPException(
@@ -465,118 +470,113 @@ async def cancel_interrogation_job(
 
     job["status"] = InterrogationStatus.CANCELLED.value
     job["completed_at"] = datetime.utcnow().isoformat()
+    await _store.save(job_id, job)
+
+
+def _populate_job_from_result(job: dict[str, Any], result: Any) -> None:
+    """Extract and serialize InterrogationResult into job dict for Redis storage."""
+    # Tools
+    tools: list[dict] = []
+    for tool in getattr(result, "tools_discovered", []):
+        inferred_risks = []
+        for param in tool.parameters:
+            if param.is_command:
+                inferred_risks.append("Command Injection")
+            if param.is_path:
+                inferred_risks.append("Path Traversal")
+            if param.is_url:
+                inferred_risks.append("SSRF (Server-Side Request Forgery)")
+            if param.is_query:
+                inferred_risks.append("SQL Injection")
+        tools.append({
+            "name": tool.name,
+            "description": tool.description,
+            "parameters": [
+                {"name": p.name, "type": p.type, "description": p.description, "required": p.required}
+                for p in tool.parameters
+            ],
+            "inferred_risks": list(set(inferred_risks)),
+        })
+    job["tools"] = tools
+
+    # Findings with location context
+    findings: list[dict] = []
+    for finding in getattr(result, "findings", []):
+        attack_surface = _build_attack_surface(finding)
+        evidence = finding.evidence or {}
+        vulnerable_input = ""
+        vulnerable_output = ""
+
+        if "arguments" in evidence:
+            args = evidence["arguments"]
+            if finding.parameter_name and finding.parameter_name in args:
+                vulnerable_input = str(args[finding.parameter_name])
+            else:
+                vulnerable_input = str(args)
+        if "result_sample" in evidence:
+            vulnerable_output = str(evidence["result_sample"])[:200]
+        elif "indicator" in evidence:
+            vulnerable_output = f"Response contained: {evidence['indicator']}"
+
+        workflow_context = _build_workflow_context(finding)
+        findings.append({
+            "id": finding.id,
+            "tool_name": finding.tool_name,
+            "parameter_name": finding.parameter_name,
+            "attack_category": finding.attack_category,
+            "severity": finding.severity.value if hasattr(finding.severity, "value") else str(finding.severity),
+            "title": finding.title,
+            "description": finding.description,
+            "evidence": finding.evidence,
+            "recommendation": finding.recommendation,
+            "attack_surface": attack_surface,
+            "vulnerable_input": vulnerable_input,
+            "vulnerable_output": vulnerable_output,
+            "workflow_context": workflow_context,
+        })
+    job["findings"] = findings
+    job["severity_counts"] = getattr(result, "severity_counts", {})
+
+    # Test results transcript
+    test_results: list[dict] = []
+    for tr in getattr(result, "test_results", []):
+        tc = tr.test_case
+        tcr = tr.tool_result
+        cat_val = tc.attack_category.value if hasattr(tc.attack_category, "value") else str(tc.attack_category)
+        sev_val = tc.severity.value if hasattr(tc.severity, "value") else str(tc.severity)
+        resp = tcr.result
+        if isinstance(resp, str) and len(resp) > 500:
+            resp = resp[:500] + "..."
+        test_results.append({
+            "tool_name": tc.tool_name,
+            "parameter_name": tc.parameter_name,
+            "attack_category": cat_val,
+            "severity": sev_val,
+            "payload_description": tc.description,
+            "arguments_sent": tcr.arguments,
+            "success": tcr.success,
+            "passed": tr.passed,
+            "response": resp,
+            "error": tcr.error,
+            "duration_ms": tcr.duration_ms,
+            "findings": tr.findings,
+        })
+    job["test_results"] = test_results
+
+    # Counts
+    job["total_tests"] = getattr(result, "total_tests", 0)
+    job["tests_passed"] = getattr(result, "tests_passed", 0)
+    job["tests_failed"] = getattr(result, "tests_failed", 0)
 
 
 def _format_job_response(job: dict[str, Any]) -> MCPInterrogationResponse:
-    """Format job dict as response model."""
-    result = job.get("result")
-
-    tools: list[MCPToolInfo] = []
-    findings: list[MCPFinding] = []
-    severity_counts: dict[str, int] = {}
-
-    if result:
-        # Format tools
-        for tool in getattr(result, "tools_discovered", []):
-            inferred_risks = []
-            for param in tool.parameters:
-                if param.is_command:
-                    inferred_risks.append("Command Injection")
-                if param.is_path:
-                    inferred_risks.append("Path Traversal")
-                if param.is_url:
-                    inferred_risks.append("SSRF (Server-Side Request Forgery)")
-                if param.is_query:
-                    inferred_risks.append("SQL Injection")
-
-            tools.append(MCPToolInfo(
-                name=tool.name,
-                description=tool.description,
-                parameters=[
-                    {
-                        "name": p.name,
-                        "type": p.type,
-                        "description": p.description,
-                        "required": p.required,
-                    }
-                    for p in tool.parameters
-                ],
-                inferred_risks=list(set(inferred_risks)),
-            ))
-
-        # Format findings with location context
-        for finding in getattr(result, "findings", []):
-            # Build attack surface description
-            attack_surface = _build_attack_surface(finding)
-
-            # Extract vulnerable input/output from evidence
-            evidence = finding.evidence or {}
-            vulnerable_input = ""
-            vulnerable_output = ""
-
-            if "arguments" in evidence:
-                args = evidence["arguments"]
-                if finding.parameter_name and finding.parameter_name in args:
-                    vulnerable_input = str(args[finding.parameter_name])
-                else:
-                    vulnerable_input = str(args)
-
-            if "result_sample" in evidence:
-                vulnerable_output = str(evidence["result_sample"])[:200]
-            elif "indicator" in evidence:
-                vulnerable_output = f"Response contained: {evidence['indicator']}"
-
-            # Build workflow context
-            workflow_context = _build_workflow_context(finding)
-
-            findings.append(MCPFinding(
-                id=finding.id,
-                tool_name=finding.tool_name,
-                parameter_name=finding.parameter_name,
-                attack_category=finding.attack_category,
-                severity=finding.severity.value,
-                title=finding.title,
-                description=finding.description,
-                evidence=finding.evidence,
-                recommendation=finding.recommendation,
-                attack_surface=attack_surface,
-                vulnerable_input=vulnerable_input,
-                vulnerable_output=vulnerable_output,
-                workflow_context=workflow_context,
-            ))
-
-        severity_counts = getattr(result, "severity_counts", {})
-
-    # Build test result transcript
-    test_entries: list[MCPTestResultEntry] = []
-    if result:
-        for tr in getattr(result, "test_results", []):
-            tc = tr.test_case
-            tcr = tr.tool_result
-            cat_val = tc.attack_category.value if hasattr(tc.attack_category, "value") else str(tc.attack_category)
-            sev_val = tc.severity.value if hasattr(tc.severity, "value") else str(tc.severity)
-            # Truncate large responses for the transcript
-            resp = tcr.result
-            if isinstance(resp, str) and len(resp) > 500:
-                resp = resp[:500] + "..."
-            test_entries.append(MCPTestResultEntry(
-                tool_name=tc.tool_name,
-                parameter_name=tc.parameter_name,
-                attack_category=cat_val,
-                severity=sev_val,
-                payload_description=tc.description,
-                arguments_sent=tcr.arguments,
-                success=tcr.success,
-                passed=tr.passed,
-                response=resp,
-                error=tcr.error,
-                duration_ms=tcr.duration_ms,
-                findings=tr.findings,
-            ))
-
-    # Extract connection config (strip sensitive headers for re-use)
+    """Format job dict as response model (all data already serialized in job)."""
     config_data = job.get("config", {})
     connection_data = config_data.get("connection") if config_data else None
+
+    tools = [MCPToolInfo(**t) for t in job.get("tools", [])]
+    findings = [MCPFinding(**f) for f in job.get("findings", [])]
+    test_entries = [MCPTestResultEntry(**t) for t in job.get("test_results", [])]
 
     return MCPInterrogationResponse(
         job_id=job["id"],
@@ -587,13 +587,13 @@ def _format_job_response(job: dict[str, Any]) -> MCPInterrogationResponse:
         completed_at=job.get("completed_at"),
         connection=connection_data,
         tools_discovered=len(tools),
-        total_tests=getattr(result, "total_tests", 0) if result else 0,
-        tests_completed=getattr(result, "tests_passed", 0) + getattr(result, "tests_failed", 0) if result else 0,
-        tests_passed=getattr(result, "tests_passed", 0) if result else 0,
-        tests_failed=getattr(result, "tests_failed", 0) if result else 0,
+        total_tests=job.get("total_tests", 0),
+        tests_completed=job.get("tests_passed", 0) + job.get("tests_failed", 0),
+        tests_passed=job.get("tests_passed", 0),
+        tests_failed=job.get("tests_failed", 0),
         tools=tools,
         findings=findings,
-        severity_counts=severity_counts,
+        severity_counts=job.get("severity_counts", {}),
         test_results=test_entries,
         error=job.get("error"),
     )

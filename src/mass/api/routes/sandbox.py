@@ -38,59 +38,33 @@ from mass.api.schemas.sandbox import (
     TargetTestRequest,
     TargetTestResponse,
 )
+from mass.api.utils.job_store import JobStore
 
 logger = logging.getLogger("mass.api.routes.sandbox")
 
 router = APIRouter()
 
-# In-memory active jobs (same pattern as interrogation)
-_active_jobs: dict[str, dict[str, Any]] = {}
+# Redis-backed job storage (per ARCHITECTURE.md Rule 1)
+_sandbox_store = JobStore("sandbox")
 
-REDIS_KEY_PREFIX = "mass:sandbox:jobs"
 REDIS_TTL = 7 * 24 * 3600  # 7 days
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────
 
 async def _save_to_redis(job_id: str, data: dict[str, Any]) -> None:
-    """Persist job state to Redis."""
-    try:
-        from mass.storage.cache import cache
-
-        await cache.set(f"sandbox:jobs:{job_id}", data, ttl=REDIS_TTL)
-    except Exception as e:
-        logger.warning("Failed to save sandbox job to Redis: %s", e)
+    """Persist job state to Redis (delegates to shared JobStore)."""
+    await _sandbox_store.save(job_id, data)
 
 
 async def _load_from_redis(job_id: str) -> dict[str, Any] | None:
-    """Load job from Redis."""
-    try:
-        from mass.storage.cache import cache
-
-        return await cache.get(f"sandbox:jobs:{job_id}")
-    except Exception:
-        return None
+    """Load job from Redis (delegates to shared JobStore)."""
+    return await _sandbox_store.load(job_id)
 
 
 async def _list_from_redis() -> list[dict[str, Any]]:
-    """List all sandbox jobs from Redis."""
-    try:
-        from mass.storage.cache import get_redis
-
-        redis = await get_redis()
-        keys = []
-        async for key in redis.scan_iter(f"mass:sandbox:jobs:*"):
-            keys.append(key)
-
-        jobs = []
-        for key in keys:
-            raw = await redis.get(key)
-            if raw:
-                data = json.loads(raw)
-                jobs.append(data)
-        return sorted(jobs, key=lambda j: j.get("created_at", ""), reverse=True)
-    except Exception:
-        return []
+    """List all sandbox jobs from Redis (delegates to shared JobStore)."""
+    return await _sandbox_store.list_jobs()
 
 
 async def _broadcast_sandbox_update(
@@ -260,26 +234,18 @@ async def start_sandbox_job(
     model_label = f"{scenario.model_provider}/{scenario.model_name}"
     now = datetime.utcnow().isoformat()
 
-    # Store in-memory
-    _active_jobs[job_id] = {
-        "status": "pending",
-        "scenario": scenario,
-        "scan_id": request.scan_id,
-        "deployment_id": deployment_id,
-        "tenant_id": tenant.tenant_id,
-        "use_judge": request.use_judge,
-        "model_label": model_label,
-        "created_at": now,
-    }
-
-    # Persist pending state to Redis
+    # Persist to Redis (including serialized scenario for background task)
     await _save_to_redis(job_id, {
         "job_id": job_id,
         "status": "pending",
         "scenario_name": scenario.name,
+        "scenario_dict": scenario.to_dict(),
         "model_used": model_label,
         "provider_used": scenario.model_provider,
         "deployment_id": deployment_id,
+        "scan_id": request.scan_id,
+        "tenant_id": tenant.tenant_id,
+        "use_judge": request.use_judge,
         "turns_total": len(scenario.turns),
         "turns_completed": 0,
         "passed_assertions": 0,
@@ -290,8 +256,8 @@ async def start_sandbox_job(
         "created_at": now,
     })
 
-    # Run in background
-    background_tasks.add_task(_execute_sandbox, job_id)
+    # Run in background (pass scenario directly to avoid re-serialization)
+    background_tasks.add_task(_execute_sandbox, job_id, scenario)
 
     return SandboxJobResponse(
         job_id=job_id,
@@ -311,27 +277,14 @@ async def start_sandbox_job(
     summary="List sandbox jobs",
 )
 async def list_sandbox_jobs(tenant: CurrentTenantDep) -> list[SandboxJobResponse]:
-    """List all sandbox jobs (active + historical from Redis)."""
-    seen: set[str] = set()
+    """List all sandbox jobs from Redis."""
     results: list[SandboxJobResponse] = []
 
-    # In-memory active jobs
-    for jid, job in _active_jobs.items():
-        seen.add(jid)
-        results.append(SandboxJobResponse(
-            job_id=jid,
-            status=job.get("status", "unknown"),
-            scenario_name=job.get("scenario", {}).name if hasattr(job.get("scenario"), "name") else "",
-            model_used=job.get("model_label", ""),
-            deployment_id=job.get("deployment_id"),
-            created_at=job.get("created_at", ""),
-        ))
-
-    # Redis historical jobs
+    # All jobs from Redis
     redis_jobs = await _list_from_redis()
     for rj in redis_jobs:
         jid = rj.get("job_id", "")
-        if jid and jid not in seen:
+        if jid:
             results.append(SandboxJobResponse(
                 job_id=jid,
                 status=rj.get("status", "unknown"),
@@ -359,14 +312,7 @@ async def list_sandbox_jobs(tenant: CurrentTenantDep) -> list[SandboxJobResponse
 )
 async def get_sandbox_job(job_id: str, tenant: CurrentTenantDep) -> SandboxDetailResponse:
     """Get full sandbox job results including steps, findings, and scores."""
-    # Check in-memory first
-    if job_id in _active_jobs:
-        job = _active_jobs[job_id]
-        result = job.get("result")
-        if result:
-            return _build_detail_response(job_id, job, result)
-
-    # Check Redis
+    # Load from Redis
     data = await _load_from_redis(job_id)
     if data:
         return SandboxDetailResponse(**{
@@ -384,16 +330,7 @@ async def get_sandbox_job(job_id: str, tenant: CurrentTenantDep) -> SandboxDetai
 )
 async def delete_sandbox_job(job_id: str, tenant: CurrentTenantDep) -> None:
     """Cancel a running sandbox job or delete a completed one."""
-    if job_id in _active_jobs:
-        _active_jobs[job_id]["status"] = "cancelled"
-        del _active_jobs[job_id]
-
-    try:
-        from mass.storage.cache import cache
-
-        await cache.delete(f"sandbox:jobs:{job_id}")
-    except Exception:
-        pass
+    await _sandbox_store.delete(job_id)
 
 
 # ─── Scenario Endpoints ──────────────────────────────────────────────
@@ -864,29 +801,21 @@ async def generate_from_architecture(
             now = datetime.utcnow().isoformat()
             model_label = f"{scenario.model_provider}/{scenario.model_name}"
 
-            _active_jobs[job_id] = {
-                "status": "pending",
-                "scenario": scenario,
-                "scan_id": None,
-                "deployment_id": request.deployment_id,
-                "tenant_id": tenant.tenant_id,
-                "use_judge": False,
-                "model_label": model_label,
-                "created_at": now,
-            }
-
             await _save_to_redis(job_id, {
                 "job_id": job_id,
                 "status": "pending",
                 "scenario_name": scenario.name,
+                "scenario_dict": scenario.to_dict(),
                 "model_used": model_label,
                 "provider_used": scenario.model_provider,
                 "deployment_id": request.deployment_id,
+                "tenant_id": tenant.tenant_id,
+                "use_judge": False,
                 "turns_total": len(scenario.turns),
                 "created_at": now,
             })
 
-            background_tasks.add_task(_execute_sandbox, job_id)
+            background_tasks.add_task(_execute_sandbox, job_id, scenario)
             job_ids.append(job_id)
 
     return GenerateFromArchitectureResponse(
@@ -1088,29 +1017,22 @@ async def run_target_security_tests(
         now = datetime.utcnow().isoformat()
         model_label = f"{scenario.model_provider}/{scenario.model_name}"
 
-        _active_jobs[job_id] = {
-            "status": "pending",
-            "scenario": scenario,
-            "scan_id": request.scan_id,
-            "deployment_id": deployment_id,
-            "tenant_id": tenant.tenant_id,
-            "use_judge": profile.use_judge,
-            "model_label": model_label,
-            "created_at": now,
-        }
-
         await _save_to_redis(job_id, {
             "job_id": job_id,
             "status": "pending",
             "scenario_name": scenario.name,
+            "scenario_dict": scenario.to_dict(),
             "model_used": model_label,
             "provider_used": scenario.model_provider,
             "deployment_id": deployment_id,
+            "scan_id": request.scan_id,
+            "tenant_id": tenant.tenant_id,
+            "use_judge": profile.use_judge,
             "turns_total": len(scenario.turns),
             "created_at": now,
         })
 
-        background_tasks.add_task(_execute_sandbox, job_id)
+        background_tasks.add_task(_execute_sandbox, job_id, scenario)
         job_ids.append(job_id)
 
     logger.info(
@@ -1377,26 +1299,21 @@ async def run_pack(
         job_id = str(uuid4())
         now = datetime.utcnow().isoformat()
 
-        _active_jobs[job_id] = {
-            "scenario": scenario,
-            "status": "pending",
-            "created_at": now,
-            "tenant_id": tenant,
-            "deployment_id": request.deployment_id,
-            "use_judge": request.use_judge,
-        }
-
         await _save_to_redis(job_id, {
             "job_id": job_id,
             "status": "pending",
             "scenario_name": scenario.name,
+            "scenario_dict": scenario.to_dict(),
             "model_used": f"{scenario.model_provider}/{scenario.model_name}",
             "provider_used": scenario.model_provider,
+            "deployment_id": request.deployment_id,
+            "tenant_id": tenant,
+            "use_judge": request.use_judge,
             "turns_total": len(scenario.turns),
             "created_at": now,
         })
 
-        background_tasks.add_task(_execute_sandbox, job_id)
+        background_tasks.add_task(_execute_sandbox, job_id, scenario)
         job_ids.append(job_id)
 
     return {
@@ -1621,26 +1538,21 @@ async def execute_proposal(
         job_id = str(uuid4())
         now = datetime.utcnow().isoformat()
 
-        _active_jobs[job_id] = {
-            "scenario": scenario,
-            "status": "pending",
-            "created_at": now,
-            "tenant_id": tenant,
-            "deployment_id": deployment_id,
-            "use_judge": use_judge,
-        }
-
         await _save_to_redis(job_id, {
             "job_id": job_id,
             "status": "pending",
             "scenario_name": scenario.name,
+            "scenario_dict": scenario.to_dict(),
             "model_used": f"{scenario.model_provider}/{scenario.model_name}",
             "provider_used": scenario.model_provider,
+            "deployment_id": deployment_id,
+            "tenant_id": tenant,
+            "use_judge": use_judge,
             "turns_total": len(scenario.turns),
             "created_at": now,
         })
 
-        background_tasks.add_task(_execute_sandbox, job_id)
+        background_tasks.add_task(_execute_sandbox, job_id, scenario)
         job_ids.append(job_id)
 
     return {
@@ -1900,34 +1812,26 @@ async def run_mcp_security_tests(
         now = datetime.utcnow().isoformat()
         model_label = f"{scenario.model_provider}/{scenario.model_name}"
 
-        _active_jobs[job_id] = {
-            "status": "pending",
-            "scenario": scenario,
-            "scan_id": None,
-            "deployment_id": request.deployment_id,
-            "tenant_id": tenant.tenant_id,
-            "use_judge": request.use_judge,
-            "model_label": model_label,
-            "created_at": now,
-        }
-
         await _save_to_redis(job_id, {
             "job_id": job_id,
             "status": "pending",
             "scenario_name": scenario.name,
+            "scenario_dict": scenario.to_dict(),
             "model_used": model_label,
             "provider_used": scenario.model_provider,
             "deployment_id": request.deployment_id,
+            "tenant_id": tenant.tenant_id,
+            "use_judge": request.use_judge,
             "turns_total": len(scenario.turns),
             "created_at": now,
         })
 
-        background_tasks.add_task(_execute_sandbox, job_id)
+        background_tasks.add_task(_execute_sandbox, job_id, scenario)
         job_ids.append(job_id)
 
     # Start bridge monitor to auto-stop when all jobs complete
     if bridge_id:
-        asyncio.create_task(monitor_bridge_jobs(bridge_id, job_ids, _active_jobs))
+        asyncio.create_task(monitor_bridge_jobs(bridge_id, job_ids))
 
     return MCPSandboxResponse(
         tools_discovered=len(all_tools),
@@ -1998,13 +1902,22 @@ def _infer_tool_risks(tool) -> list[str]:
 
 # ─── Background Execution ────────────────────────────────────────────
 
-async def _execute_sandbox(job_id: str) -> None:
+async def _execute_sandbox(job_id: str, scenario: Any = None) -> None:
     """Execute sandbox run in background."""
-    job = _active_jobs.get(job_id)
+    job = await _load_from_redis(job_id)
     if not job:
         return
 
-    scenario = job["scenario"]
+    # Reconstruct scenario from Redis if not passed directly
+    if scenario is None:
+        from mass.sandbox.scenario import Scenario
+        scenario_dict = job.get("scenario_dict")
+        if scenario_dict:
+            scenario = Scenario.from_dict(scenario_dict)
+        else:
+            logger.error("No scenario found for sandbox job %s", job_id)
+            return
+
     job["status"] = "running"
 
     # Fire started event
@@ -2118,9 +2031,7 @@ async def _execute_sandbox(job_id: str) -> None:
             "validated_finding_ids": result.validated_finding_ids,
         }
 
-        # Store result in job and Redis
-        job["result"] = result
-        job["response_data"] = response_data
+        # Store result to Redis
         job["status"] = result.status
         await _save_to_redis(job_id, response_data)
 

@@ -696,13 +696,15 @@ async def stop_bridge(bridge_id: str) -> None:
 async def monitor_bridge_jobs(
     bridge_id: str,
     job_ids: list[str],
-    active_jobs: dict[str, Any],
 ) -> None:
     """Background coroutine: stop bridge when all related jobs finish.
 
-    Checks job statuses every 5 seconds. Also enforces a 30-minute
+    Checks job statuses every 5 seconds via Redis. Also enforces a 30-minute
     maximum bridge lifetime as a safety net.
     """
+    from mass.api.utils.job_store import JobStore
+    store = JobStore("sandbox")
+
     entry = _active_bridges.get(bridge_id)
     if not entry:
         return
@@ -723,14 +725,14 @@ async def monitor_bridge_jobs(
             )
             break
 
-        # Check if all jobs are done
+        # Check if all jobs are done (via Redis)
         all_done = True
         for job_id in job_ids:
-            job = active_jobs.get(job_id)
+            job = await store.load(job_id)
             if not job:
                 continue
-            status = job.get("status", "unknown")
-            if status in ("pending", "running"):
+            job_status = job.get("status", "unknown")
+            if job_status in ("pending", "running"):
                 all_done = False
                 break
 

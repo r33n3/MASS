@@ -1,8 +1,8 @@
 # Architecture Implementation Progress
 
 ## Current Phase: Phase 1 — Performance Bottleneck Fixes
-## Current Item: P1.2 — In-memory job store migration to Redis
-## Overall: 1/19 items complete
+## Current Item: P1.3 — Configurable thread pools via env vars
+## Overall: 2/19 items complete
 
 ### Completed Items
 - [x] P1.1 — Docker Compose resource limits — Date: 2026-02-15
@@ -10,15 +10,23 @@
   - Added resource limits to `docker-compose.lite.yml` API service
   - Added PostgreSQL tuning parameters (max_connections=200, shared_buffers, etc.)
   - Verified: containers running with correct memory/CPU limits applied
+- [x] P1.2 — In-memory job store migration to Redis — Date: 2026-02-15
+  - Created `src/mass/api/utils/job_store.py` — shared Redis-backed `JobStore` class
+  - Migrated `mcp_interrogation.py` — replaced `_jobs` dict with `JobStore("interrogation")`
+  - Migrated `mcp_audit.py` — replaced `_audit_jobs` dict with `JobStore("audit")`
+  - Migrated `sandbox.py` — replaced `_active_jobs` dict with `JobStore("sandbox")`
+  - Updated `tool_executor.py` — removed `_active_jobs` import
+  - Updated `mcp/stdio_bridge.py` — reads job status from Redis instead of memory
+  - Verified: all 3 endpoints return data correctly from Redis
 
 ### In Progress
-- [ ] P1.2 — In-memory job store migration to Redis
+- [ ] P1.3 — Configurable thread pools via env vars
 
 ### Remaining Items
 
 **Phase 1: Performance Bottleneck Fixes**
 - [x] P1.1 — Docker Compose resource limits
-- [ ] P1.2 — In-memory job store migration to Redis
+- [x] P1.2 — In-memory job store migration to Redis
 - [ ] P1.3 — Configurable thread pools via env vars
 - [ ] P1.4 — Distributed rate limiting (Redis-backed)
 - [ ] P1.5 — LLM connection pooling (runners/pool.py)
@@ -41,8 +49,15 @@
 - [ ] P3.7 — Cross-Model Collaborative Security
 - [ ] P3.8 — Cloud-Native Ecosystem
 
-### Compliance Status
-_(baseline check will be performed after P1.2 completes)_
+### Compliance Status (after P1.2)
+- Rule 1 (No in-memory stores): PARTIAL — 3 target files migrated; `interrogation.py` still has `_active_jobs` (not in original scope, will address)
+- Rule 2 (LLM connection pools): PENDING — P1.5
+- Rule 3 (No blocking I/O): Not yet audited
+- Rule 4 (WebSocket events): Existing modules comply
+- Rule 5 (Timeouts): Not yet audited
+- Rule 6 (Standard route pattern): Existing modules comply
+- Rule 7 (Env var config): PENDING — P1.3
+- Rule 8 (Resource cleanup): Existing modules comply
 
 ### Known Issues
-_(none yet)_
+- `src/mass/api/routes/interrogation.py:46` — has `_active_jobs: dict` (same violation pattern, not in original scope)
