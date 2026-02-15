@@ -87,6 +87,17 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
             },
         )
 
+        # Record metrics
+        from mass.core.metrics import METRICS
+        labels = {"method": request.method, "endpoint": request.url.path, "status": str(response.status_code)}
+        METRICS.inc("mass_api_requests_total", labels=labels, help_text="Total API requests")
+        METRICS.observe(
+            "mass_api_latency_seconds",
+            duration_ms / 1000,
+            labels={"endpoint": request.url.path},
+            help_text="API request latency in seconds",
+        )
+
         # Add request ID to response headers
         response.headers["X-Request-ID"] = request_id
 

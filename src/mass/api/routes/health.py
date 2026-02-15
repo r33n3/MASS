@@ -163,15 +163,10 @@ async def detailed_health_check() -> dict:
 async def metrics() -> Response:
     """Prometheus metrics endpoint.
 
-    Returns metrics in Prometheus exposition format.
+    Returns all application metrics in Prometheus exposition format.
     """
-    # TODO: P2.3 will add real prometheus_client metrics
-    metrics_text = f"""# HELP mass_uptime_seconds Time since service started
-# TYPE mass_uptime_seconds gauge
-mass_uptime_seconds {time.time() - _startup_time}
-"""
-
+    from mass.core.metrics import METRICS
     return Response(
-        content=metrics_text,
+        content=METRICS.export(),
         media_type="text/plain; version=0.0.4; charset=utf-8",
     )

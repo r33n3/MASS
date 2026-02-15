@@ -1,8 +1,8 @@
 # Architecture Implementation Progress
 
-## Current Phase: Phase 2 — Observability
-## Current Item: P2.3 — Metrics foundation
-## Overall: 10/19 items complete — Phase 1 COMPLETE
+## Current Phase: Phase 3 — Future Modules
+## Current Item: P3.1 — CI/CD Integration
+## Overall: 11/19 items complete — Phase 1+2 COMPLETE
 
 ### Completed Items
 - [x] P1.1 — Docker Compose resource limits — Date: 2026-02-15
@@ -71,8 +71,20 @@
   - `/health/detailed` — full subsystem status with latency_ms and queue depth
   - Verified: DB 2.3ms, Redis 0.6ms, queue depth 0 — all healthy
 
+- [x] P2.3 — Metrics foundation — Date: 2026-02-15
+  - Created `src/mass/core/metrics.py` — lightweight thread-safe metrics registry
+    - `METRICS.inc()` — counter increment with labels
+    - `METRICS.set()` — gauge set with labels
+    - `METRICS.observe()` — histogram-like sum+count tracking
+    - `METRICS.export()` — Prometheus text exposition format
+  - Integrated into request logging middleware:
+    - `mass_api_requests_total{method, endpoint, status}` counter
+    - `mass_api_latency_seconds{endpoint}` sum + count
+  - Updated `/metrics` endpoint to use real `METRICS.export()`
+  - Verified: metrics accumulate correctly, Prometheus-compatible format
+
 ### In Progress
-- [ ] P2.3 — Metrics foundation
+- [ ] P3.1 — CI/CD Integration
 
 ### Remaining Items
 
@@ -89,7 +101,7 @@
 **Phase 2: Observability**
 - [x] P2.1 — Structured logging (structlog)
 - [x] P2.2 — Health check enhancement
-- [ ] P2.3 — Metrics foundation
+- [x] P2.3 — Metrics foundation
 
 **Phase 3: Future Modules**
 - [ ] P3.1 — CI/CD Integration
