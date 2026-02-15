@@ -1,8 +1,8 @@
 # Architecture Implementation Progress
 
 ## Current Phase: Phase 1 — Performance Bottleneck Fixes
-## Current Item: P1.6 — LLM provider rate limiting
-## Overall: 5/19 items complete
+## Current Item: P1.7 — PostgreSQL indexes
+## Overall: 6/19 items complete
 
 ### Completed Items
 - [x] P1.1 — Docker Compose resource limits — Date: 2026-02-15
@@ -51,8 +51,24 @@
   - Registered `close_all_pools()` in app lifespan shutdown handler
   - Verified: build, restart, chat via Ollama pooled connection returns correctly
 
+- [x] P1.6 — LLM provider rate limiting — Date: 2026-02-15
+  - Added `ProviderRateLimiter` class to `src/mass/runners/pool.py`
+    - Token bucket algorithm with per-provider RPM limits
+    - Defaults: OpenAI 500, Anthropic 200, Gemini 300, Grok 200, Ollama unlimited
+    - Override via `MASS_LLM_RPM_<PROVIDER>` env vars
+    - Both sync (`acquire_sync`) and async (`acquire`) methods
+  - Integrated rate limiting into all 7 runners:
+    - `ollama.py` — sync + async
+    - `openai.py` — sync + async
+    - `anthropic.py` — sync + async
+    - `gemini.py` — sync + async
+    - `grok.py` — sync + async
+    - `bedrock.py` — sync only
+    - `azure_openai.py` — sync + async
+  - Verified: build, restart, health check passes
+
 ### In Progress
-- [ ] P1.6 — LLM provider rate limiting
+- [ ] P1.7 — PostgreSQL indexes
 
 ### Remaining Items
 
@@ -62,7 +78,7 @@
 - [x] P1.3 — Configurable thread pools via env vars
 - [x] P1.4 — Distributed rate limiting (Redis-backed)
 - [x] P1.5 — LLM connection pooling (runners/pool.py)
-- [ ] P1.6 — LLM provider rate limiting
+- [x] P1.6 — LLM provider rate limiting
 - [ ] P1.7 — PostgreSQL indexes
 - [ ] P1.8 — Dead letter queue for failed jobs
 

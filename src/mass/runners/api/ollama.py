@@ -10,7 +10,7 @@ from typing import Any
 import httpx
 
 from mass.runners.base import BaseRunner, RunnerResult, RunnerStatus, ToolCall, register_runner
-from mass.runners.pool import get_httpx_async_pool, get_httpx_pool
+from mass.runners.pool import get_httpx_async_pool, get_httpx_pool, rate_limiter
 
 
 @register_runner
@@ -112,6 +112,7 @@ class OllamaRunner(BaseRunner):
             if tools:
                 payload["tools"] = tools
 
+            rate_limiter.acquire_sync("ollama")
             client = get_httpx_pool("ollama", timeout=self.timeout)
             response = client.post(url, json=payload)
             response.raise_for_status()
@@ -208,6 +209,7 @@ class OllamaRunner(BaseRunner):
             if tools:
                 payload["tools"] = tools
 
+            await rate_limiter.acquire("ollama")
             client = get_httpx_async_pool("ollama", timeout=self.timeout)
             response = await client.post(url, json=payload)
             response.raise_for_status()

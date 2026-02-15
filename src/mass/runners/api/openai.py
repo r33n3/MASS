@@ -9,6 +9,7 @@ import time
 from typing import Any
 
 from mass.runners.base import BaseRunner, RunnerResult, RunnerStatus, ToolCall, register_runner
+from mass.runners.pool import rate_limiter
 
 
 @register_runner
@@ -136,6 +137,7 @@ class OpenAIRunner(BaseRunner):
             if tools:
                 api_kwargs["tools"] = tools
 
+            rate_limiter.acquire_sync("openai")
             response = client.chat.completions.create(**api_kwargs)
 
             latency_ms = (time.time() - start_time) * 1000
@@ -225,6 +227,7 @@ class OpenAIRunner(BaseRunner):
             if tools:
                 api_kwargs["tools"] = tools
 
+            await rate_limiter.acquire("openai")
             response = await client.chat.completions.create(**api_kwargs)
 
             latency_ms = (time.time() - start_time) * 1000

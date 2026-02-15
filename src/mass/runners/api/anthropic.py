@@ -8,6 +8,7 @@ import time
 from typing import Any
 
 from mass.runners.base import BaseRunner, RunnerResult, RunnerStatus, ToolCall, register_runner
+from mass.runners.pool import rate_limiter
 
 
 @register_runner
@@ -148,6 +149,7 @@ class AnthropicRunner(BaseRunner):
             if tools:
                 message_kwargs["tools"] = self._convert_tools_to_anthropic(tools)
 
+            rate_limiter.acquire_sync("anthropic")
             response = client.messages.create(**message_kwargs)
 
             latency_ms = (time.time() - start_time) * 1000
@@ -240,6 +242,7 @@ class AnthropicRunner(BaseRunner):
             if tools:
                 message_kwargs["tools"] = self._convert_tools_to_anthropic(tools)
 
+            await rate_limiter.acquire("anthropic")
             response = await client.messages.create(**message_kwargs)
 
             latency_ms = (time.time() - start_time) * 1000

@@ -9,6 +9,7 @@ import time
 from typing import Any
 
 from mass.runners.base import BaseRunner, RunnerResult, RunnerStatus, register_runner
+from mass.runners.pool import rate_limiter
 
 
 XAI_BASE_URL = "https://api.x.ai/v1"
@@ -117,6 +118,7 @@ class GrokRunner(BaseRunner):
                 messages.append({"role": "system", "content": system_prompt})
             messages.append({"role": "user", "content": prompt})
 
+            rate_limiter.acquire_sync("grok")
             response = client.chat.completions.create(
                 model=kwargs.get("model", self.model),
                 messages=messages,
@@ -190,6 +192,7 @@ class GrokRunner(BaseRunner):
                 messages.append({"role": "system", "content": system_prompt})
             messages.append({"role": "user", "content": prompt})
 
+            await rate_limiter.acquire("grok")
             response = await client.chat.completions.create(
                 model=kwargs.get("model", self.model),
                 messages=messages,

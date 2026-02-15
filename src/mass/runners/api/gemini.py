@@ -8,6 +8,7 @@ import time
 from typing import Any
 
 from mass.runners.base import BaseRunner, RunnerResult, RunnerStatus, register_runner
+from mass.runners.pool import rate_limiter
 
 
 @register_runner
@@ -113,6 +114,7 @@ class GeminiRunner(BaseRunner):
             if system_prompt:
                 config.system_instruction = system_prompt
 
+            rate_limiter.acquire_sync("gemini")
             response = client.models.generate_content(
                 model=model,
                 contents=prompt,
@@ -193,6 +195,7 @@ class GeminiRunner(BaseRunner):
             if system_prompt:
                 config.system_instruction = system_prompt
 
+            await rate_limiter.acquire("gemini")
             response = await client.aio.models.generate_content(
                 model=model,
                 contents=prompt,

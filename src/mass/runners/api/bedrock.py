@@ -10,6 +10,7 @@ import time
 from typing import Any
 
 from mass.runners.base import BaseRunner, RunnerResult, RunnerStatus, register_runner
+from mass.runners.pool import rate_limiter
 
 
 @register_runner
@@ -153,6 +154,7 @@ class BedrockRunner(BaseRunner):
             if system_prompt:
                 converse_kwargs["system"] = [{"text": system_prompt}]
 
+            rate_limiter.acquire_sync("bedrock")
             response = client.converse(**converse_kwargs)
 
             latency_ms = (time.time() - start_time) * 1000

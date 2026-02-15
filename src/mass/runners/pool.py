@@ -12,7 +12,10 @@ pool is reused across calls — see each runner's ``_get_async_client``
 method.
 """
 
+import asyncio
 import logging
+import time
+import threading
 
 import httpx
 
@@ -74,3 +77,94 @@ async def close_all_pools() -> None:
         await pool.aclose()
     _async_pools.clear()
     logger.info("All LLM connection pools closed")
+
+
+# ---------------------------------------------------------------------------
+# Per-provider rate limiter (token bucket)
+# ---------------------------------------------------------------------------
+
+class ProviderRateLimiter:
+    """Async token-bucket rate limiter keyed by LLM provider.
+
+    Limits are expressed as *requests per minute*.  A value of ``0``
+    means unlimited (no throttling).  Defaults are intentionally
+    conservative so a fresh deployment doesn't burn through quotas.
+    """
+
+    # Requests-per-minute defaults.  Override via MASS_LLM_RPM_<PROVIDER>.
+    DEFAULTS: dict[str, int] = {
+        "openai": 500,
+        "anthropic": 200,
+        "gemini": 300,
+        "grok": 200,
+        "bedrock": 200,
+        "azure_openai": 500,
+        "ollama": 0,  # unlimited (local)
+    }
+
+    def __init__(self) -> None:
+        self._buckets: dict[str, float] = {}
+        self._last_refill: dict[str, float] = {}
+        self._limits: dict[str, float] = {}
+        self._async_lock = asyncio.Lock()
+        self._sync_lock = threading.Lock()
+
+    def _get_rpm(self, provider: str) -> int:
+        """Return the RPM limit for *provider*, checking env overrides."""
+        import os
+        env_key = f"MASS_LLM_RPM_{provider.upper()}"
+        env_val = os.environ.get(env_key)
+        if env_val is not None:
+            return int(env_val)
+        return self.DEFAULTS.get(provider, 200)
+
+    def _refill(self, provider: str) -> None:
+        """Refill bucket based on elapsed time."""
+        rpm = self._get_rpm(provider)
+        if rpm <= 0:
+            return  # unlimited
+        now = time.monotonic()
+        if provider not in self._last_refill:
+            self._buckets[provider] = float(rpm)
+            self._last_refill[provider] = now
+            return
+        elapsed = now - self._last_refill[provider]
+        self._last_refill[provider] = now
+        tokens_per_sec = rpm / 60.0
+        self._buckets[provider] = min(
+            float(rpm),
+            self._buckets.get(provider, 0.0) + elapsed * tokens_per_sec,
+        )
+
+    async def acquire(self, provider: str) -> None:
+        """Wait until a token is available for *provider* (async)."""
+        rpm = self._get_rpm(provider)
+        if rpm <= 0:
+            return  # unlimited
+
+        while True:
+            async with self._async_lock:
+                self._refill(provider)
+                if self._buckets.get(provider, 0.0) >= 1.0:
+                    self._buckets[provider] -= 1.0
+                    return
+            # Back off briefly before retrying
+            await asyncio.sleep(0.1)
+
+    def acquire_sync(self, provider: str) -> None:
+        """Block until a token is available for *provider* (sync)."""
+        rpm = self._get_rpm(provider)
+        if rpm <= 0:
+            return  # unlimited
+
+        while True:
+            with self._sync_lock:
+                self._refill(provider)
+                if self._buckets.get(provider, 0.0) >= 1.0:
+                    self._buckets[provider] -= 1.0
+                    return
+            time.sleep(0.1)
+
+
+# Singleton instance
+rate_limiter = ProviderRateLimiter()

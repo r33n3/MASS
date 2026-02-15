@@ -9,6 +9,7 @@ import time
 from typing import Any
 
 from mass.runners.base import BaseRunner, RunnerResult, RunnerStatus, register_runner
+from mass.runners.pool import rate_limiter
 
 
 @register_runner
@@ -132,6 +133,7 @@ class AzureOpenAIRunner(BaseRunner):
                 messages.append({"role": "system", "content": system_prompt})
             messages.append({"role": "user", "content": prompt})
 
+            rate_limiter.acquire_sync("azure_openai")
             response = client.chat.completions.create(
                 model=kwargs.get("model", self.azure_deployment),
                 messages=messages,
@@ -211,6 +213,7 @@ class AzureOpenAIRunner(BaseRunner):
                 messages.append({"role": "system", "content": system_prompt})
             messages.append({"role": "user", "content": prompt})
 
+            await rate_limiter.acquire("azure_openai")
             response = await client.chat.completions.create(
                 model=kwargs.get("model", self.azure_deployment),
                 messages=messages,
