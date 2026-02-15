@@ -177,6 +177,10 @@ def create_app() -> FastAPI:
     # Add request logging middleware
     app.add_middleware(RequestLoggingMiddleware)
 
+    # Add distributed rate limiting (Redis-backed)
+    from mass.api.middleware.rate_limit import RateLimitMiddleware
+    app.add_middleware(RateLimitMiddleware)
+
     # Add authentication middleware (extracts keys; enforces in production)
     from mass.api.middleware.auth import AuthMiddleware
     app.add_middleware(AuthMiddleware)

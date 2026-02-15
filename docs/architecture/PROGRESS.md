@@ -1,8 +1,8 @@
 # Architecture Implementation Progress
 
 ## Current Phase: Phase 1 — Performance Bottleneck Fixes
-## Current Item: P1.4 — Distributed rate limiting (Redis-backed)
-## Overall: 3/19 items complete
+## Current Item: P1.5 — LLM connection pooling (runners/pool.py)
+## Overall: 4/19 items complete
 
 ### Completed Items
 - [x] P1.1 — Docker Compose resource limits — Date: 2026-02-15
@@ -29,9 +29,17 @@
   - Updated `executor.py` — reads probe concurrency defaults from config instead of hardcoded 3/2
   - Updated `.env.example` with new env vars and sizing guidance (dev/staging/production)
   - Verified: build, restart, health check, and all endpoints pass
+- [x] P1.4 — Distributed rate limiting (Redis-backed) — Date: 2026-02-15
+  - Replaced in-memory `TokenBucket` with Redis-backed sliding window counter
+  - Key pattern: `mass:ratelimit:api:{client}:{minute}` with 120s TTL
+  - Registered `RateLimitMiddleware` in `main.py` (was previously unregistered)
+  - Fail-open design: if Redis is unavailable, requests pass through
+  - Headers confirmed: `X-RateLimit-Limit: 100`, counter decrements correctly
+  - Health/ready/metrics endpoints bypass rate limiting
+  - Verified: build, restart, rate limit headers working across multiple requests
 
 ### In Progress
-- [ ] P1.4 — Distributed rate limiting (Redis-backed)
+- [ ] P1.5 — LLM connection pooling (runners/pool.py)
 
 ### Remaining Items
 
@@ -39,7 +47,7 @@
 - [x] P1.1 — Docker Compose resource limits
 - [x] P1.2 — In-memory job store migration to Redis
 - [x] P1.3 — Configurable thread pools via env vars
-- [ ] P1.4 — Distributed rate limiting (Redis-backed)
+- [x] P1.4 — Distributed rate limiting (Redis-backed)
 - [ ] P1.5 — LLM connection pooling (runners/pool.py)
 - [ ] P1.6 — LLM provider rate limiting
 - [ ] P1.7 — PostgreSQL indexes
@@ -60,14 +68,14 @@
 - [ ] P3.7 — Cross-Model Collaborative Security
 - [ ] P3.8 — Cloud-Native Ecosystem
 
-### Compliance Status (after P1.3)
+### Compliance Status (after P1.4)
 - Rule 1 (No in-memory stores): PARTIAL — 3 target files migrated; `interrogation.py` still has `_active_jobs` (not in original scope, will address)
 - Rule 2 (LLM connection pools): PENDING — P1.5
 - Rule 3 (No blocking I/O): Not yet audited
 - Rule 4 (WebSocket events): Existing modules comply
 - Rule 5 (Timeouts): Not yet audited
 - Rule 6 (Standard route pattern): Existing modules comply
-- Rule 7 (Env var config): COMPLIANT — P1.3 complete. Thread pools, probe concurrency all configurable via env vars.
+- Rule 7 (Env var config): COMPLIANT — P1.3 complete. Thread pools, probe concurrency, rate limits all configurable via env vars.
 - Rule 8 (Resource cleanup): Existing modules comply
 
 ### Known Issues

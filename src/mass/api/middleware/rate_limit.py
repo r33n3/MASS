@@ -1,11 +1,12 @@
 """Rate limiting middleware.
 
-Implements token bucket rate limiting per API key/IP.
+Implements distributed rate limiting backed by Redis so the limit is
+shared across all API replicas.  Falls back to a simple per-process
+counter when Redis is unavailable.
 """
 
-import asyncio
+import logging
 import time
-from collections import defaultdict
 from typing import Callable
 
 from fastapi import Request, Response, status
@@ -14,75 +15,89 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from mass.core.config import get_settings
 
+logger = logging.getLogger(__name__)
 
-class TokenBucket:
-    """Token bucket rate limiter."""
-
-    def __init__(self, tokens_per_second: float, bucket_size: int):
-        self.tokens_per_second = tokens_per_second
-        self.bucket_size = bucket_size
-        self.tokens = bucket_size
-        self.last_update = time.monotonic()
-        self._lock = asyncio.Lock()
-
-    async def consume(self, tokens: int = 1) -> bool:
-        """Try to consume tokens from the bucket.
-
-        Returns True if tokens were consumed, False if rate limited.
-        """
-        async with self._lock:
-            now = time.monotonic()
-            elapsed = now - self.last_update
-            self.last_update = now
-
-            # Add tokens based on elapsed time
-            self.tokens = min(
-                self.bucket_size,
-                self.tokens + elapsed * self.tokens_per_second,
-            )
-
-            if self.tokens >= tokens:
-                self.tokens -= tokens
-                return True
-            return False
-
-    @property
-    def retry_after(self) -> float:
-        """Get seconds until a token is available."""
-        if self.tokens >= 1:
-            return 0
-        return (1 - self.tokens) / self.tokens_per_second
+# Redis key prefix for rate-limit counters
+_RL_PREFIX = "mass:ratelimit:api"
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
-    """Middleware for rate limiting.
+    """Middleware for distributed rate limiting.
 
-    Implements per-client rate limiting using token buckets.
+    Uses Redis INCR + EXPIRE for a sliding-window counter keyed by
+    client identity and the current minute.  Shared across all API
+    replicas so the effective limit equals the configured limit
+    regardless of replica count.
     """
 
     def __init__(self, app):
         super().__init__(app)
         settings = get_settings()
         self.requests_per_minute = settings.api_rate_limit
+        self._redis = None
+        self._redis_failed = False
 
-        # Token buckets per client (API key or IP)
-        self._buckets: dict[str, TokenBucket] = defaultdict(
-            lambda: TokenBucket(
-                tokens_per_second=self.requests_per_minute / 60,
-                bucket_size=self.requests_per_minute,
+    # ------------------------------------------------------------------
+    # Redis helpers
+    # ------------------------------------------------------------------
+
+    async def _get_redis(self):
+        """Lazily acquire a Redis connection."""
+        if self._redis is not None:
+            return self._redis
+        try:
+            import redis.asyncio as aioredis
+            settings = get_settings()
+            self._redis = aioredis.from_url(
+                settings.redis.url,
+                decode_responses=True,
+                socket_connect_timeout=2,
             )
-        )
+            # Quick connectivity check
+            await self._redis.ping()
+            self._redis_failed = False
+            return self._redis
+        except Exception:
+            self._redis = None
+            if not self._redis_failed:
+                logger.warning("Rate-limiter falling back to pass-through: Redis unavailable")
+                self._redis_failed = True
+            return None
 
-        # Cleanup task for old buckets
-        self._cleanup_interval = 300  # 5 minutes
-        self._last_cleanup = time.monotonic()
+    async def _check_rate_limit(self, client_key: str) -> tuple[bool, int]:
+        """Check the rate limit for *client_key*.
 
-    def _get_client_key(self, request: Request) -> str:
+        Returns (allowed, current_count).  Uses a per-minute Redis key
+        with a 120-second TTL for safety.
+        """
+        r = await self._get_redis()
+        if r is None:
+            # Redis down — allow request (fail-open)
+            return True, 0
+
+        current_minute = int(time.time()) // 60
+        redis_key = f"{_RL_PREFIX}:{client_key}:{current_minute}"
+
+        try:
+            count = await r.incr(redis_key)
+            if count == 1:
+                await r.expire(redis_key, 120)  # 2-minute TTL for safety
+            remaining = max(0, self.requests_per_minute - count)
+            return count <= self.requests_per_minute, remaining
+        except Exception:
+            # Redis error — fail open
+            return True, 0
+
+    # ------------------------------------------------------------------
+    # Client identification
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _get_client_key(request: Request) -> str:
         """Get the rate limit key for a client.
 
         Uses API key if available, otherwise IP address.
         """
-        # Try API key first
         api_key = request.headers.get("X-API-Key")
         if api_key:
             return f"key:{api_key[:20]}"
@@ -91,27 +106,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if auth_header.startswith("Bearer "):
             return f"key:{auth_header[7:27]}"
 
-        # Fall back to IP
         client_ip = request.client.host if request.client else "unknown"
         return f"ip:{client_ip}"
 
-    async def _cleanup_old_buckets(self) -> None:
-        """Clean up old token buckets to prevent memory leaks."""
-        now = time.monotonic()
-        if now - self._last_cleanup < self._cleanup_interval:
-            return
-
-        self._last_cleanup = now
-        threshold = now - 3600  # Remove buckets unused for 1 hour
-
-        keys_to_remove = [
-            key
-            for key, bucket in self._buckets.items()
-            if bucket.last_update < threshold
-        ]
-
-        for key in keys_to_remove:
-            del self._buckets[key]
+    # ------------------------------------------------------------------
+    # Middleware dispatch
+    # ------------------------------------------------------------------
 
     async def dispatch(
         self, request: Request, call_next: Callable[[Request], Response]
@@ -121,13 +121,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if request.url.path in {"/health", "/ready", "/metrics"}:
             return await call_next(request)
 
-        # Get client key and bucket
         client_key = self._get_client_key(request)
-        bucket = self._buckets[client_key]
+        allowed, remaining = await self._check_rate_limit(client_key)
 
-        # Try to consume a token
-        if not await bucket.consume():
-            retry_after = int(bucket.retry_after) + 1
+        if not allowed:
+            retry_after = 60  # Wait until next minute window
             return JSONResponse(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 content={
@@ -138,14 +136,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 headers={"Retry-After": str(retry_after)},
             )
 
-        # Process request
         response = await call_next(request)
 
         # Add rate limit headers
         response.headers["X-RateLimit-Limit"] = str(self.requests_per_minute)
-        response.headers["X-RateLimit-Remaining"] = str(int(bucket.tokens))
-
-        # Periodic cleanup
-        await self._cleanup_old_buckets()
+        response.headers["X-RateLimit-Remaining"] = str(remaining)
 
         return response
