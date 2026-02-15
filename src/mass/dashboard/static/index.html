@@ -9072,6 +9072,120 @@
                             </div>
                         </div>
                     </div>
+
+                    <!-- ═══ Containerized MCP Package Audit ═══ -->
+                    <div class="card" style="margin-top:0.75rem;">
+                        <div class="card-header">
+                            <span class="card-title">Audit MCP Package</span>
+                            <span class="text-muted" style="font-size:0.65rem;">CI/CD Security Scanner</span>
+                        </div>
+                        <div style="padding:0.75rem;">
+                            <p class="text-muted" style="font-size:0.7rem;margin:0 0 0.5rem;">
+                                Spin up an MCP server package in a sandboxed Docker container, run full security interrogation, then tear down.
+                            </p>
+                            <div class="grid-2" style="gap:0.5rem;margin-bottom:0.4rem;">
+                                <div class="form-group">
+                                    <label class="form-label" style="font-size:0.65rem;color:var(--text-muted);">Package Name</label>
+                                    <input type="text" class="form-input" id="mcpAuditPackage" placeholder="@modelcontextprotocol/server-everything">
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label" style="font-size:0.65rem;color:var(--text-muted);">Runtime</label>
+                                    <select class="form-select" id="mcpAuditRuntime" onchange="onMcpAuditRuntimeChange()">
+                                        <option value="npx">npx (Node.js — auto-install &amp; run)</option>
+                                        <option value="npm">npm (Node.js — global install)</option>
+                                        <option value="pip">pip (Python)</option>
+                                        <option value="uvx">uvx (Python — uv)</option>
+                                        <option value="command">Custom command</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div id="mcpAuditCmdGroup" style="display:none;margin-bottom:0.4rem;">
+                                <div class="grid-2" style="gap:0.5rem;">
+                                    <div class="form-group">
+                                        <label class="form-label" style="font-size:0.65rem;color:var(--text-muted);">Command</label>
+                                        <input type="text" class="form-input" id="mcpAuditCommand" placeholder="python -m my_server">
+                                    </div>
+                                    <div class="form-group">
+                                        <label class="form-label" style="font-size:0.65rem;color:var(--text-muted);">Arguments</label>
+                                        <input type="text" class="form-input" id="mcpAuditArgs" placeholder="--port 3000">
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="form-group mb-1">
+                                <label class="form-label" style="font-size:0.65rem;color:var(--text-muted);">Environment Variables</label>
+                                <input type="text" class="form-input" id="mcpAuditEnv" placeholder="KEY1=value1,KEY2=value2 (optional)">
+                            </div>
+                            <div class="grid-2" style="gap:0.5rem;margin-bottom:0.5rem;">
+                                <div class="form-group">
+                                    <label class="form-label" style="font-size:0.65rem;color:var(--text-muted);">Max Payloads / Category</label>
+                                    <input type="number" class="form-input" id="mcpAuditMaxPayloads" value="5" min="1" max="20">
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label" style="font-size:0.65rem;color:var(--text-muted);">Timeout (sec)</label>
+                                    <input type="number" class="form-input" id="mcpAuditTimeout" value="600" min="60" max="3600">
+                                </div>
+                            </div>
+                            <div style="display:flex;gap:0.75rem;margin-bottom:0.5rem;">
+                                <label class="tool-toggle" style="font-size:0.7rem;">
+                                    <input type="checkbox" id="mcpAuditBaseline" checked> Run baseline
+                                </label>
+                                <label class="tool-toggle" style="font-size:0.7rem;">
+                                    <input type="checkbox" id="mcpAuditSandbox"> Sandbox scenarios
+                                </label>
+                                <label class="tool-toggle" style="font-size:0.7rem;">
+                                    <input type="checkbox" id="mcpAuditNetwork" checked> Allow network
+                                </label>
+                            </div>
+                            <button class="btn btn-primary" style="width:100%;" onclick="startMcpAudit()" id="mcpAuditRunBtn">Start Package Audit</button>
+                        </div>
+                    </div>
+
+                    <!-- Audit Jobs List -->
+                    <div class="card" style="margin-top:0.5rem;" id="mcpAuditJobsCard">
+                        <div class="card-header">
+                            <span class="card-title">Package Audit Jobs</span>
+                            <button class="btn btn-secondary btn-sm" onclick="loadMcpAudits()">Refresh</button>
+                        </div>
+                        <div class="jobs-list" id="mcpAuditJobsList" style="max-height:400px;overflow-y:auto;">
+                            <div class="text-muted" style="padding:1rem;text-align:center;font-size:0.75rem;">No package audits yet. Start one above.</div>
+                        </div>
+                    </div>
+
+                    <!-- Audit Detail Panel -->
+                    <div class="card" id="mcpAuditDetailPanel" style="display:none;margin-top:0.5rem;">
+                        <div class="card-header">
+                            <span class="card-title" id="mcpAuditDetailTitle">Audit Results</span>
+                            <div style="display:flex;align-items:center;gap:0.5rem;">
+                                <button class="btn btn-sm" style="font-size:0.65rem;padding:0.15rem 0.5rem;" onclick="cancelMcpAudit()">Cancel</button>
+                                <span id="mcpAuditStatusBadge" class="status-badge"></span>
+                            </div>
+                        </div>
+                        <div style="padding:0.75rem;">
+                            <!-- Phase progress -->
+                            <div id="mcpAuditPhaseBar" style="margin-bottom:0.5rem;padding:0.4rem;background:var(--bg-tertiary);border-radius:6px;font-size:0.7rem;"></div>
+                            <!-- Score row -->
+                            <div class="sandbox-score-row" id="mcpAuditScoreRow"></div>
+                            <!-- Result tabs -->
+                            <div class="sandbox-result-tabs" style="margin-top:0.5rem;">
+                                <button class="sandbox-rtab active" onclick="showMcpAuditTab('findings', event)">Findings</button>
+                                <button class="sandbox-rtab" onclick="showMcpAuditTab('transcript', event)">Transcript</button>
+                                <button class="sandbox-rtab" onclick="showMcpAuditTab('tools', event)">Tools</button>
+                                <button class="sandbox-rtab" onclick="showMcpAuditTab('logs', event)">Logs</button>
+                            </div>
+                            <div class="sandbox-tab-content" id="mcpAuditFindingsTab">
+                                <div id="mcpAuditFindings" style="max-height:500px;overflow-y:auto;"></div>
+                            </div>
+                            <div class="sandbox-tab-content" id="mcpAuditTranscriptTab" style="display:none;">
+                                <div id="mcpAuditTranscript" style="max-height:600px;overflow-y:auto;"></div>
+                            </div>
+                            <div class="sandbox-tab-content" id="mcpAuditToolsTab" style="display:none;">
+                                <div id="mcpAuditToolsList" style="max-height:400px;overflow-y:auto;"></div>
+                            </div>
+                            <div class="sandbox-tab-content" id="mcpAuditLogsTab" style="display:none;">
+                                <pre id="mcpAuditLogs" style="max-height:400px;overflow-y:auto;font-size:0.65rem;background:var(--bg-tertiary);padding:0.5rem;border-radius:4px;color:var(--accent);white-space:pre-wrap;word-break:break-all;"></pre>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -12815,6 +12929,7 @@
             if (mode === 'mcpInterrogate') {
                 loadMcpInterrogationCategories();
                 loadMcpInterrogationJobs();
+                loadMcpAudits();
             }
         }
 
@@ -14142,6 +14257,286 @@
             const div = document.createElement('div');
             div.textContent = str;
             return div.innerHTML;
+        }
+
+        // ═══ Containerized MCP Package Audit ═══════════════════════════
+
+        var _mcpAuditCurrentId = null;
+        var _mcpAuditPollTimer = null;
+
+        function onMcpAuditRuntimeChange() {
+            var rt = document.getElementById('mcpAuditRuntime').value;
+            document.getElementById('mcpAuditCmdGroup').style.display = rt === 'command' ? '' : 'none';
+        }
+
+        async function startMcpAudit() {
+            var pkg = document.getElementById('mcpAuditPackage').value.trim();
+            if (!pkg) { showToast('Enter a package name', 'warning'); return; }
+
+            var runtime = document.getElementById('mcpAuditRuntime').value;
+            var btn = document.getElementById('mcpAuditRunBtn');
+            btn.disabled = true;
+            btn.textContent = 'Starting audit...';
+
+            // Parse env vars
+            var envStr = document.getElementById('mcpAuditEnv').value.trim();
+            var env = {};
+            if (envStr) {
+                envStr.split(',').forEach(function(pair) {
+                    var eq = pair.indexOf('=');
+                    if (eq > 0) env[pair.slice(0, eq).trim()] = pair.slice(eq + 1).trim();
+                });
+            }
+
+            // Build args
+            var argsStr = '';
+            var cmdEl = document.getElementById('mcpAuditCommand');
+            if (runtime === 'command') {
+                argsStr = document.getElementById('mcpAuditArgs').value.trim();
+            }
+
+            var body = {
+                name: pkg.split('/').pop() + ' Audit',
+                package: pkg,
+                runtime: runtime,
+                command: runtime === 'command' ? cmdEl.value.trim() : null,
+                args: argsStr ? argsStr.split(/\s+/) : [],
+                env: env,
+                timeout: parseInt(document.getElementById('mcpAuditTimeout').value) || 600,
+                max_payloads_per_category: parseInt(document.getElementById('mcpAuditMaxPayloads').value) || 5,
+                run_baseline: document.getElementById('mcpAuditBaseline').checked,
+                run_sandbox_scenarios: document.getElementById('mcpAuditSandbox').checked,
+                allow_network: document.getElementById('mcpAuditNetwork').checked,
+            };
+
+            try {
+                var data = await apiFetch('/api/v1/mcp-audit', { method: 'POST', body: JSON.stringify(body) });
+                showToast('Package audit started: ' + pkg, 'success');
+                _mcpAuditCurrentId = data.audit_id;
+                _startAuditPolling(data.audit_id);
+                loadMcpAudits();
+            } catch(e) {
+                showToast('Audit failed: ' + (e.message || e), 'error');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Start Package Audit';
+            }
+        }
+
+        function _startAuditPolling(auditId) {
+            if (_mcpAuditPollTimer) clearInterval(_mcpAuditPollTimer);
+            _mcpAuditPollTimer = setInterval(async function() {
+                try {
+                    var job = await apiFetch('/api/v1/mcp-audit/jobs/' + auditId);
+                    renderMcpAuditDetail(job);
+                    if (job.status === 'completed' || job.status === 'failed') {
+                        clearInterval(_mcpAuditPollTimer);
+                        _mcpAuditPollTimer = null;
+                        loadMcpAudits();
+                        if (job.status === 'completed') {
+                            showToast('Package audit complete: ' + job.findings.length + ' findings', 'success');
+                            _trackSandboxRun();
+                        }
+                    }
+                } catch(e) {
+                    clearInterval(_mcpAuditPollTimer);
+                    _mcpAuditPollTimer = null;
+                }
+            }, 3000);
+            // Show detail panel immediately
+            viewMcpAuditJob(auditId);
+        }
+
+        async function loadMcpAudits() {
+            try {
+                var jobs = await apiFetch('/api/v1/mcp-audit/jobs');
+                var list = document.getElementById('mcpAuditJobsList');
+                if (!jobs.length) {
+                    list.innerHTML = '<div class="text-muted" style="padding:1rem;text-align:center;font-size:0.75rem;">No package audits yet. Start one above.</div>';
+                    return;
+                }
+                list.innerHTML = jobs.map(function(j) {
+                    var findingsCount = (j.findings || []).length;
+                    var sev = j.severity_counts || {};
+                    var critHigh = (sev.critical || 0) + (sev.high || 0);
+                    var statusClass = 'status-' + j.status;
+                    return '<div class="job-item ' + (_mcpAuditCurrentId === j.audit_id ? 'active' : '') + '"'
+                        + ' onclick="viewMcpAuditJob(\'' + j.audit_id + '\')" style="cursor:pointer;padding:0.5rem 0.75rem;border-bottom:1px solid var(--border);">'
+                        + '<div style="display:flex;justify-content:space-between;align-items:center;">'
+                        + '<div>'
+                        + '<div style="font-size:0.75rem;font-weight:600;">' + _escapeHtml(j.package) + '</div>'
+                        + '<div style="font-size:0.65rem;color:var(--text-muted);">'
+                        + j.runtime + ' &middot; ' + j.tools_discovered + ' tools &middot; ' + j.tests_completed + '/' + j.total_tests + ' tests'
+                        + (findingsCount ? ' &middot; <span style="color:var(--danger)">' + findingsCount + ' finding' + (findingsCount !== 1 ? 's' : '') + '</span>' : '')
+                        + '</div>'
+                        + '</div>'
+                        + '<span class="status-badge ' + statusClass + '" style="font-size:0.6rem;">' + j.status + '</span>'
+                        + '</div></div>';
+                }).join('');
+            } catch(e) {
+                // silent
+            }
+        }
+
+        async function viewMcpAuditJob(auditId) {
+            _mcpAuditCurrentId = auditId;
+            try {
+                var job = await apiFetch('/api/v1/mcp-audit/jobs/' + auditId);
+                renderMcpAuditDetail(job);
+                if (job.status !== 'completed' && job.status !== 'failed') {
+                    _startAuditPolling(auditId);
+                }
+                loadMcpAudits();
+            } catch(e) {
+                showToast('Failed to load audit: ' + (e.message || e), 'error');
+            }
+        }
+
+        function renderMcpAuditDetail(job) {
+            var panel = document.getElementById('mcpAuditDetailPanel');
+            panel.style.display = '';
+
+            // Title
+            document.getElementById('mcpAuditDetailTitle').textContent = job.package + ' (' + job.runtime + ')';
+
+            // Status badge
+            var badge = document.getElementById('mcpAuditStatusBadge');
+            badge.textContent = job.status;
+            badge.className = 'status-badge status-' + job.status;
+
+            // Phase bar
+            var phases = ['container_setup', 'interrogation', 'scenarios', 'cleanup', 'done'];
+            var phaseIdx = phases.indexOf(job.phase);
+            var phaseBar = document.getElementById('mcpAuditPhaseBar');
+            phaseBar.innerHTML = phases.slice(0, -1).map(function(p, i) {
+                var active = i === phaseIdx;
+                var done = i < phaseIdx;
+                var color = done ? 'var(--success)' : (active ? 'var(--accent)' : 'var(--text-muted)');
+                var label = p.replace(/_/g, ' ').replace(/\b\w/g, function(c) { return c.toUpperCase(); });
+                return '<span style="color:' + color + ';font-weight:' + (active ? '700' : '400') + ';">' + label + '</span>';
+            }).join(' <span style="color:var(--text-muted);">&rarr;</span> ')
+            + (job.phase_detail ? '<div style="color:var(--text-secondary);font-size:0.65rem;margin-top:0.2rem;">' + _escapeHtml(job.phase_detail) + '</div>' : '');
+
+            // Score row
+            var scoreRow = document.getElementById('mcpAuditScoreRow');
+            var sev = job.severity_counts || {};
+            scoreRow.innerHTML =
+                '<div class="score-item"><span class="score-val" style="color:var(--accent);">' + job.tools_discovered + '</span><span class="score-label">Tools</span></div>'
+                + '<div class="score-item"><span class="score-val">' + job.total_tests + '</span><span class="score-label">Tests</span></div>'
+                + '<div class="score-item"><span class="score-val" style="color:var(--success);">' + job.tests_passed + '</span><span class="score-label">Passed</span></div>'
+                + '<div class="score-item"><span class="score-val" style="color:var(--danger);">' + job.tests_failed + '</span><span class="score-label">Failed</span></div>'
+                + '<div class="score-item"><span class="score-val" style="color:#dc3545;">' + (sev.critical || 0) + '</span><span class="score-label">Critical</span></div>'
+                + '<div class="score-item"><span class="score-val" style="color:#fd7e14;">' + (sev.high || 0) + '</span><span class="score-label">High</span></div>';
+
+            // Findings tab
+            var findingsEl = document.getElementById('mcpAuditFindings');
+            if (!job.findings || !job.findings.length) {
+                findingsEl.innerHTML = job.status === 'completed'
+                    ? '<div class="text-muted" style="padding:0.5rem;font-size:0.75rem;">No vulnerabilities found. All tests passed.</div>'
+                    : '<div class="text-muted" style="padding:0.5rem;font-size:0.75rem;">Awaiting results...</div>';
+            } else {
+                var sevOrder = { critical: 0, high: 1, medium: 2, low: 3 };
+                var sorted = job.findings.slice().sort(function(a, b) { return (sevOrder[a.severity] || 99) - (sevOrder[b.severity] || 99); });
+                findingsEl.innerHTML = sorted.map(function(f) {
+                    var sevColor = { critical: '#dc3545', high: '#fd7e14', medium: '#ffc107', low: '#20c997' }[f.severity] || '#6c757d';
+                    return '<div style="border:1px solid var(--border);border-radius:6px;padding:0.6rem;margin-bottom:0.4rem;border-left:3px solid ' + sevColor + ';">'
+                        + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.25rem;">'
+                        + '<span style="font-size:0.75rem;font-weight:600;">' + _escapeHtml(f.title) + '</span>'
+                        + '<span style="font-size:0.6rem;padding:0.1rem 0.4rem;border-radius:3px;background:' + sevColor + ';color:#fff;text-transform:uppercase;">' + f.severity + '</span>'
+                        + '</div>'
+                        + '<div style="font-size:0.7rem;color:var(--text-secondary);margin-bottom:0.3rem;">' + _escapeHtml(f.description) + '</div>'
+                        + '<div style="font-size:0.65rem;color:var(--text-muted);">'
+                        + '<strong>Tool:</strong> ' + _escapeHtml(f.tool_name) + ' &middot; <strong>Param:</strong> ' + _escapeHtml(f.parameter_name) + ' &middot; <strong>Category:</strong> ' + f.attack_category.replace(/_/g, ' ')
+                        + '</div>'
+                        + (f.recommendation ? '<div style="font-size:0.65rem;color:var(--info);margin-top:0.2rem;"><strong>Recommendation:</strong> ' + _escapeHtml(f.recommendation) + '</div>' : '')
+                        + '</div>';
+                }).join('');
+            }
+
+            // Transcript tab - reuse format from MCP interrogation
+            var transcriptEl = document.getElementById('mcpAuditTranscript');
+            var testResults = job.test_results || [];
+            if (!testResults.length) {
+                transcriptEl.innerHTML = '<div class="text-muted" style="padding:0.5rem;font-size:0.75rem;">No test results available.</div>';
+            } else {
+                transcriptEl.innerHTML = testResults.map(function(tr, idx) {
+                    var badge2 = tr.passed
+                        ? '<span style="font-size:0.55rem;padding:0.1rem 0.3rem;border-radius:3px;background:#20c997;color:#000;">SAFE</span>'
+                        : '<span style="font-size:0.55rem;padding:0.1rem 0.3rem;border-radius:3px;background:#dc3545;color:#fff;">VULNERABLE</span>';
+                    var sevColor2 = {critical:'#dc3545',high:'#fd7e14',medium:'#ffc107',low:'#20c997'}[tr.severity] || '#6c757d';
+                    var respStr2 = tr.error
+                        ? '<span style="color:#f85149;">' + _escapeHtml(tr.error) + '</span>'
+                        : _escapeHtml(typeof tr.response === 'object' && tr.response !== null ? JSON.stringify(tr.response, null, 2) : String(tr.response || '(empty)'));
+                    return '<div style="border:1px solid var(--border);border-radius:6px;margin-bottom:0.4rem;overflow:hidden;">'
+                        + '<div style="display:flex;align-items:center;gap:0.5rem;padding:0.5rem;cursor:pointer;background:var(--bg-secondary);" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display===\'none\'?\'\':\'none\'">'
+                        + '<span style="font-size:0.6rem;color:var(--text-muted);min-width:1.5rem;">#' + (idx+1) + '</span>'
+                        + '<span style="font-size:0.7rem;font-weight:600;flex:1;">' + _escapeHtml(tr.tool_name) + '<span style="color:var(--text-muted);font-weight:400;">.' + _escapeHtml(tr.parameter_name) + '</span></span>'
+                        + '<span style="font-size:0.55rem;color:' + sevColor2 + ';font-weight:600;">' + tr.attack_category.replace(/_/g,' ') + '</span>'
+                        + badge2
+                        + '<span style="font-size:0.5rem;color:var(--text-muted);">' + (tr.duration_ms || 0).toFixed(0) + 'ms</span>'
+                        + '</div>'
+                        + '<div style="display:none;padding:0.5rem;font-size:0.65rem;border-top:1px solid var(--border);">'
+                        + '<div style="color:var(--text-muted);font-weight:700;font-size:0.55rem;margin-bottom:0.2rem;">PAYLOAD</div>'
+                        + '<div style="color:var(--text-secondary);margin-bottom:0.4rem;">' + _escapeHtml(tr.payload_description) + '</div>'
+                        + '<div style="color:var(--text-muted);font-weight:700;font-size:0.55rem;margin-bottom:0.2rem;">REQUEST</div>'
+                        + '<pre style="font-size:0.6rem;background:var(--bg-tertiary);padding:0.4rem;border-radius:4px;overflow-x:auto;margin-bottom:0.4rem;">' + _escapeHtml(JSON.stringify(tr.arguments_sent, null, 2)) + '</pre>'
+                        + '<div style="color:var(--text-muted);font-weight:700;font-size:0.55rem;margin-bottom:0.2rem;">RESPONSE</div>'
+                        + '<pre style="font-size:0.6rem;background:var(--bg-tertiary);padding:0.4rem;border-radius:4px;overflow-x:auto;margin-bottom:0.4rem;">' + respStr2 + '</pre>'
+                        + (tr.findings && tr.findings.length ? '<div style="color:var(--text-muted);font-weight:700;font-size:0.55rem;margin-bottom:0.2rem;">FINDINGS</div><ul style="color:#f85149;margin:0;padding-left:1rem;">' + tr.findings.map(function(f2){return '<li>'+_escapeHtml(f2)+'</li>';}).join('') + '</ul>' : '')
+                        + '</div></div>';
+                }).join('');
+            }
+
+            // Tools tab
+            var toolsEl = document.getElementById('mcpAuditToolsList');
+            if (!job.tools || !job.tools.length) {
+                toolsEl.innerHTML = '<div class="text-muted" style="padding:0.5rem;font-size:0.75rem;">No tools discovered.</div>';
+            } else {
+                toolsEl.innerHTML = job.tools.map(function(t) {
+                    return '<div style="border:1px solid var(--border);border-radius:6px;padding:0.5rem;margin-bottom:0.4rem;">'
+                        + '<div style="font-size:0.75rem;font-weight:700;color:var(--text-primary);margin-bottom:0.2rem;">' + _escapeHtml(t.name) + '</div>'
+                        + '<div style="font-size:0.65rem;color:var(--text-secondary);margin-bottom:0.3rem;">' + _escapeHtml(t.description) + '</div>'
+                        + '<div style="font-size:0.6rem;color:var(--text-muted);">'
+                        + t.parameters.map(function(p) { return '<span style="font-family:var(--font-mono);background:var(--bg-tertiary);padding:0.1rem 0.3rem;border-radius:2px;margin-right:0.3rem;">' + _escapeHtml(p.name) + ': ' + p.type + '</span>'; }).join('')
+                        + '</div>'
+                        + (t.inferred_risks && t.inferred_risks.length ? '<div style="font-size:0.55rem;color:#fd7e14;margin-top:0.2rem;">\u26A0 ' + t.inferred_risks.join(', ') + '</div>' : '')
+                        + '</div>';
+                }).join('');
+            }
+
+            // Logs tab
+            var logsEl = document.getElementById('mcpAuditLogs');
+            logsEl.textContent = job.container_logs || '(no logs available)';
+
+            // Sandbox job IDs
+            if (job.sandbox_job_ids && job.sandbox_job_ids.length) {
+                var sandboxInfo = '<div style="margin-top:0.5rem;padding:0.4rem;background:var(--bg-tertiary);border-radius:4px;font-size:0.65rem;">'
+                    + '<strong>Sandbox Scenarios:</strong> ' + job.proposals_count + ' proposals, '
+                    + job.sandbox_job_ids.length + ' jobs launched'
+                    + '</div>';
+                findingsEl.innerHTML += sandboxInfo;
+            }
+        }
+
+        function showMcpAuditTab(tab, evt) {
+            document.querySelectorAll('#mcpAuditDetailPanel .sandbox-rtab').forEach(function(b) { b.classList.remove('active'); });
+            if (evt && evt.target) evt.target.classList.add('active');
+            document.getElementById('mcpAuditFindingsTab').style.display = tab === 'findings' ? '' : 'none';
+            document.getElementById('mcpAuditTranscriptTab').style.display = tab === 'transcript' ? '' : 'none';
+            document.getElementById('mcpAuditToolsTab').style.display = tab === 'tools' ? '' : 'none';
+            document.getElementById('mcpAuditLogsTab').style.display = tab === 'logs' ? '' : 'none';
+        }
+
+        async function cancelMcpAudit() {
+            if (!_mcpAuditCurrentId) return;
+            try {
+                await apiFetch('/api/v1/mcp-audit/jobs/' + _mcpAuditCurrentId, { method: 'DELETE' });
+                showToast('Audit cancelled', 'info');
+                if (_mcpAuditPollTimer) { clearInterval(_mcpAuditPollTimer); _mcpAuditPollTimer = null; }
+                loadMcpAudits();
+            } catch(e) {
+                showToast('Cancel failed: ' + (e.message || e), 'error');
+            }
         }
 
         // Target Type Selection

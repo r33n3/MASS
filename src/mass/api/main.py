@@ -34,6 +34,7 @@ from mass.api.routes import (
     interrogation,
     browse,
     mcp_interrogation,
+    mcp_audit,
     chat,
     targets,
     docs,
@@ -204,6 +205,7 @@ def create_app() -> FastAPI:
     app.include_router(interrogation.router, prefix=f"{api_prefix}/interrogation", tags=["Interrogation"])
     app.include_router(browse.router, prefix=f"{api_prefix}/browse", tags=["Browse"])
     app.include_router(mcp_interrogation.router, prefix=f"{api_prefix}/mcp-interrogation", tags=["MCP Interrogation"])
+    app.include_router(mcp_audit.router, prefix=f"{api_prefix}/mcp-audit", tags=["MCP Audit"])
     app.include_router(sandbox.router, prefix=f"{api_prefix}/sandbox", tags=["Sandbox"])
     app.include_router(chat.router, prefix=f"{api_prefix}/chat", tags=["Chat"])
     app.include_router(targets.router, prefix=f"{api_prefix}/targets", tags=["Targets"])
