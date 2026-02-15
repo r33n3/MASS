@@ -49,6 +49,14 @@ def upgrade() -> None:
         "ix_findings_tenant_status", "findings", ["tenant_id", "status"]
     )
 
+    # -- standalone date-ordered queries (no tenant filter) --
+    op.execute(
+        "CREATE INDEX ix_scans_created_desc ON scans (created_at DESC)"
+    )
+    op.execute(
+        "CREATE INDEX ix_findings_created_desc ON findings (created_at DESC)"
+    )
+
     # -- reports --
     op.create_index("ix_reports_scan", "reports", ["scan_id"])
     op.create_index("ix_reports_tenant", "reports", ["tenant_id"])
@@ -67,6 +75,8 @@ def downgrade() -> None:
     op.drop_index("ix_api_keys_prefix", table_name="api_keys")
     op.drop_index("ix_reports_tenant", table_name="reports")
     op.drop_index("ix_reports_scan", table_name="reports")
+    op.drop_index("ix_findings_created_desc", table_name="findings")
+    op.drop_index("ix_scans_created_desc", table_name="scans")
     op.drop_index("ix_findings_tenant_status", table_name="findings")
     op.drop_index("ix_findings_scan_category", table_name="findings")
     op.drop_index("ix_findings_scan_severity", table_name="findings")

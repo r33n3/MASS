@@ -1,8 +1,8 @@
 # Architecture Implementation Progress
 
 ## Current Phase: Phase 1 — Performance Bottleneck Fixes
-## Current Item: P1.7 — PostgreSQL indexes
-## Overall: 6/19 items complete
+## Current Item: P1.8 — Dead letter queue for failed jobs
+## Overall: 7/19 items complete
 
 ### Completed Items
 - [x] P1.1 — Docker Compose resource limits — Date: 2026-02-15
@@ -67,8 +67,20 @@
     - `azure_openai.py` — sync + async
   - Verified: build, restart, health check passes
 
+- [x] P1.7 — PostgreSQL indexes — Date: 2026-02-15
+  - Migration `20260207_120000_add_performance_indexes.py` already covered most indexes:
+    - `ix_scans_tenant_status`, `ix_scans_tenant_created`, `ix_scans_deployment_created`
+    - `ix_findings_scan_severity`, `ix_findings_scan_category`, `ix_findings_tenant_status`
+    - `ix_findings_fingerprint`, `ix_deployments_tenant`
+    - Plus: reports, api_keys, users indexes
+  - Added 2 missing standalone date-ordered indexes:
+    - `ix_scans_created_desc` on scans(created_at DESC)
+    - `ix_findings_created_desc` on findings(created_at DESC)
+  - Applied directly to running database + updated migration file
+  - Verified: 14 total indexes on core tables (scans, findings, deployments)
+
 ### In Progress
-- [ ] P1.7 — PostgreSQL indexes
+- [ ] P1.8 — Dead letter queue for failed jobs
 
 ### Remaining Items
 
@@ -79,7 +91,7 @@
 - [x] P1.4 — Distributed rate limiting (Redis-backed)
 - [x] P1.5 — LLM connection pooling (runners/pool.py)
 - [x] P1.6 — LLM provider rate limiting
-- [ ] P1.7 — PostgreSQL indexes
+- [x] P1.7 — PostgreSQL indexes
 - [ ] P1.8 — Dead letter queue for failed jobs
 
 **Phase 2: Observability**
