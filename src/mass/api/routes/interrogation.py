@@ -45,9 +45,11 @@ _REDIS_PREFIX = "mass:interrogation:jobs:"
 # In-memory cache for active (running) jobs only
 _active_jobs: dict[str, dict[str, Any]] = {}
 
-# Thread pool for interrogation execution
+# Thread pool for interrogation execution — size configurable via
+# MASS_INTERROGATION_THREAD_POOL_SIZE.
+from mass.core.config import get_settings as _get_settings
 _interrogation_pool = concurrent.futures.ThreadPoolExecutor(
-    max_workers=4,
+    max_workers=_get_settings().interrogation_thread_pool_size,
     thread_name_prefix="mass-interrogate",
 )
 

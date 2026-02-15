@@ -10,12 +10,13 @@ import json
 import logging
 from datetime import datetime
 
+from mass.core.config import get_settings
 from mass.orchestration.service import ScanService, ScanResult
 
-# Expand default thread pool so 10+ concurrent scans don't exhaust it.
+# Thread pool for scan execution — size configurable via MASS_SCAN_THREAD_POOL_SIZE.
 # Each scan runs synchronous file I/O in asyncio.to_thread().
 _scan_thread_pool = concurrent.futures.ThreadPoolExecutor(
-    max_workers=20,
+    max_workers=get_settings().scan_thread_pool_size,
     thread_name_prefix="mass-scan",
 )
 from mass.storage.database import get_session, get_session_factory

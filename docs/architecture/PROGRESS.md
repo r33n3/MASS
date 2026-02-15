@@ -1,8 +1,8 @@
 # Architecture Implementation Progress
 
 ## Current Phase: Phase 1 — Performance Bottleneck Fixes
-## Current Item: P1.3 — Configurable thread pools via env vars
-## Overall: 2/19 items complete
+## Current Item: P1.4 — Distributed rate limiting (Redis-backed)
+## Overall: 3/19 items complete
 
 ### Completed Items
 - [x] P1.1 — Docker Compose resource limits — Date: 2026-02-15
@@ -18,16 +18,27 @@
   - Updated `tool_executor.py` — removed `_active_jobs` import
   - Updated `mcp/stdio_bridge.py` — reads job status from Redis instead of memory
   - Verified: all 3 endpoints return data correctly from Redis
+- [x] P1.3 — Configurable thread pools via env vars — Date: 2026-02-15
+  - Added 4 new config fields to `src/mass/core/config.py`:
+    - `MASS_SCAN_THREAD_POOL_SIZE` (default: 20)
+    - `MASS_INTERROGATION_THREAD_POOL_SIZE` (default: 8)
+    - `MASS_PROBE_MAX_CONCURRENT` (default: 5)
+    - `MASS_PROBE_MAX_CONCURRENT_PROMPTS` (default: 2)
+  - Updated `scan_execution.py` — reads pool size from config instead of hardcoded 20
+  - Updated `interrogation.py` — reads pool size from config instead of hardcoded 4
+  - Updated `executor.py` — reads probe concurrency defaults from config instead of hardcoded 3/2
+  - Updated `.env.example` with new env vars and sizing guidance (dev/staging/production)
+  - Verified: build, restart, health check, and all endpoints pass
 
 ### In Progress
-- [ ] P1.3 — Configurable thread pools via env vars
+- [ ] P1.4 — Distributed rate limiting (Redis-backed)
 
 ### Remaining Items
 
 **Phase 1: Performance Bottleneck Fixes**
 - [x] P1.1 — Docker Compose resource limits
 - [x] P1.2 — In-memory job store migration to Redis
-- [ ] P1.3 — Configurable thread pools via env vars
+- [x] P1.3 — Configurable thread pools via env vars
 - [ ] P1.4 — Distributed rate limiting (Redis-backed)
 - [ ] P1.5 — LLM connection pooling (runners/pool.py)
 - [ ] P1.6 — LLM provider rate limiting
@@ -49,14 +60,14 @@
 - [ ] P3.7 — Cross-Model Collaborative Security
 - [ ] P3.8 — Cloud-Native Ecosystem
 
-### Compliance Status (after P1.2)
+### Compliance Status (after P1.3)
 - Rule 1 (No in-memory stores): PARTIAL — 3 target files migrated; `interrogation.py` still has `_active_jobs` (not in original scope, will address)
 - Rule 2 (LLM connection pools): PENDING — P1.5
 - Rule 3 (No blocking I/O): Not yet audited
 - Rule 4 (WebSocket events): Existing modules comply
 - Rule 5 (Timeouts): Not yet audited
 - Rule 6 (Standard route pattern): Existing modules comply
-- Rule 7 (Env var config): PENDING — P1.3
+- Rule 7 (Env var config): COMPLIANT — P1.3 complete. Thread pools, probe concurrency all configurable via env vars.
 - Rule 8 (Resource cleanup): Existing modules comply
 
 ### Known Issues

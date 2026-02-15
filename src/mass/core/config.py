@@ -153,6 +153,24 @@ class MassSettings(BaseSettings):
     scan_max_concurrent: int = Field(default=10, ge=1)
     probe_batch_size: int = Field(default=50, ge=1, le=500)
 
+    # Thread pool / concurrency tuning
+    scan_thread_pool_size: int = Field(
+        default=20, ge=1, le=200,
+        description="Thread pool size for scan execution",
+    )
+    interrogation_thread_pool_size: int = Field(
+        default=8, ge=1, le=100,
+        description="Thread pool size for interrogation execution",
+    )
+    probe_max_concurrent: int = Field(
+        default=5, ge=1, le=50,
+        description="Max concurrent probes per scan",
+    )
+    probe_max_concurrent_prompts: int = Field(
+        default=2, ge=1, le=20,
+        description="Max concurrent prompts per probe",
+    )
+
     # Platform-wide LLM defaults
     default_provider: str = Field(
         default="ollama",

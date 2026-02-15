@@ -18,6 +18,13 @@ from mass.orchestration.planner import JobType, PlannedJob
 logger = logging.getLogger(__name__)
 
 
+def _get_probe_defaults() -> tuple[int, int]:
+    """Return (max_concurrent_probes, max_concurrent_prompts) from config."""
+    from mass.core.config import get_settings
+    s = get_settings()
+    return s.probe_max_concurrent, s.probe_max_concurrent_prompts
+
+
 class JobStatus(str, Enum):
     """Job execution status."""
 
@@ -2099,8 +2106,14 @@ class JobExecutor:
                 prompt_timeout=float(job.timeout_seconds or 30),
                 max_probes=int(job_cfg.get("max_probes", 0)),
                 max_prompts_per_probe=int(job_cfg.get("max_prompts_per_probe", 0)),
-                max_concurrent_probes=int(job_cfg.get("max_concurrent_probes", 3)),
-                max_concurrent_prompts=int(job_cfg.get("max_concurrent_prompts", 2)),
+                max_concurrent_probes=int(job_cfg.get(
+                    "max_concurrent_probes",
+                    _get_probe_defaults()[0],
+                )),
+                max_concurrent_prompts=int(job_cfg.get(
+                    "max_concurrent_prompts",
+                    _get_probe_defaults()[1],
+                )),
             )
 
             # Pass remediation cache for enriched finding guidance
