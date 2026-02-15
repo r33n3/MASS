@@ -55,6 +55,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     import logging
     import os
 
+    # Set up structured logging before anything else
+    from mass.core.logging_config import setup_logging
+    setup_logging()
+
     logger = logging.getLogger(__name__)
 
     # Startup

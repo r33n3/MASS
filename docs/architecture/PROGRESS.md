@@ -1,8 +1,8 @@
 # Architecture Implementation Progress
 
 ## Current Phase: Phase 2 — Observability
-## Current Item: P2.1 — Structured logging (structlog)
-## Overall: 8/19 items complete — Phase 1 COMPLETE
+## Current Item: P2.2 — Health check enhancement
+## Overall: 9/19 items complete — Phase 1 COMPLETE
 
 ### Completed Items
 - [x] P1.1 — Docker Compose resource limits — Date: 2026-02-15
@@ -52,8 +52,17 @@
     - `POST /api/v1/sandbox/dlq/{job_id}/retry` — retry from DLQ
   - Verified: build, restart, endpoints return empty DLQ (no failures yet)
 
+- [x] P2.1 — Structured logging (structlog) — Date: 2026-02-15
+  - Created `src/mass/core/logging_config.py` — structlog configuration module
+  - Development mode: colored human-readable output with key=value fields
+  - Production/staging mode: JSON output for log aggregation
+  - `ExtraAdder` processor extracts `extra={}` from existing stdlib log calls
+  - Quiet noisy third-party loggers (httpx, httpcore, uvicorn.access, watchfiles)
+  - Called from app lifespan startup — applies to all existing `logging.getLogger()` calls
+  - Verified: structured fields (client_ip, method, path, status_code, duration_ms) appear in logs
+
 ### In Progress
-- [ ] P2.1 — Structured logging (structlog)
+- [ ] P2.2 — Health check enhancement
 
 ### Remaining Items
 
@@ -68,7 +77,7 @@
 - [x] P1.8 — Dead letter queue for failed jobs
 
 **Phase 2: Observability**
-- [ ] P2.1 — Structured logging (structlog)
+- [x] P2.1 — Structured logging (structlog)
 - [ ] P2.2 — Health check enhancement
 - [ ] P2.3 — Metrics foundation
 
