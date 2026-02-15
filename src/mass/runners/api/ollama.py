@@ -10,6 +10,7 @@ from typing import Any
 import httpx
 
 from mass.runners.base import BaseRunner, RunnerResult, RunnerStatus, ToolCall, register_runner
+from mass.runners.pool import get_httpx_async_pool, get_httpx_pool
 
 
 @register_runner
@@ -111,10 +112,10 @@ class OllamaRunner(BaseRunner):
             if tools:
                 payload["tools"] = tools
 
-            with httpx.Client(timeout=self.timeout) as client:
-                response = client.post(url, json=payload)
-                response.raise_for_status()
-                data = response.json()
+            client = get_httpx_pool("ollama", timeout=self.timeout)
+            response = client.post(url, json=payload)
+            response.raise_for_status()
+            data = response.json()
 
             latency_ms = (time.time() - start_time) * 1000
 
@@ -207,10 +208,10 @@ class OllamaRunner(BaseRunner):
             if tools:
                 payload["tools"] = tools
 
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.post(url, json=payload)
-                response.raise_for_status()
-                data = response.json()
+            client = get_httpx_async_pool("ollama", timeout=self.timeout)
+            response = await client.post(url, json=payload)
+            response.raise_for_status()
+            data = response.json()
 
             latency_ms = (time.time() - start_time) * 1000
 

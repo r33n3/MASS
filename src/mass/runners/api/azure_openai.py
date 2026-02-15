@@ -61,6 +61,7 @@ class AzureOpenAIRunner(BaseRunner):
         self.max_tokens = max_tokens
 
         self._client = None
+        self._async_client = None
 
     def _get_client(self) -> Any:
         """Get or create Azure OpenAI client."""
@@ -192,19 +193,18 @@ class AzureOpenAIRunner(BaseRunner):
         start_time = time.time()
 
         try:
-            from openai import AsyncAzureOpenAI
-
-            if not self.azure_endpoint:
-                raise ValueError("Azure endpoint required.")
-
-            client_kwargs: dict[str, Any] = {
-                "azure_endpoint": self.azure_endpoint,
-                "api_version": self.api_version,
-            }
-            if self.api_key:
-                client_kwargs["api_key"] = self.api_key
-
-            client = AsyncAzureOpenAI(**client_kwargs)
+            if self._async_client is None:
+                from openai import AsyncAzureOpenAI
+                if not self.azure_endpoint:
+                    raise ValueError("Azure endpoint required.")
+                client_kwargs: dict[str, Any] = {
+                    "azure_endpoint": self.azure_endpoint,
+                    "api_version": self.api_version,
+                }
+                if self.api_key:
+                    client_kwargs["api_key"] = self.api_key
+                self._async_client = AsyncAzureOpenAI(**client_kwargs)
+            client = self._async_client
 
             messages = []
             if system_prompt:

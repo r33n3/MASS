@@ -65,6 +65,7 @@ class GrokRunner(BaseRunner):
         self.max_tokens = max_tokens
 
         self._client = None
+        self._async_client = None
 
     def _get_client(self) -> Any:
         """Get or create xAI client (OpenAI-compatible)."""
@@ -176,12 +177,13 @@ class GrokRunner(BaseRunner):
         start_time = time.time()
 
         try:
-            from openai import AsyncOpenAI
-
-            client = AsyncOpenAI(
-                api_key=self.api_key,
-                base_url=self.base_url,
-            )
+            if self._async_client is None:
+                from openai import AsyncOpenAI
+                self._async_client = AsyncOpenAI(
+                    api_key=self.api_key,
+                    base_url=self.base_url,
+                )
+            client = self._async_client
 
             messages = []
             if system_prompt:

@@ -141,6 +141,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception:
         pass
 
+    # Shutdown - close LLM connection pools
+    try:
+        from mass.runners.pool import close_all_pools
+        await close_all_pools()
+    except Exception:
+        pass
+
     # Shutdown - close scan queue Redis connection
     from mass.api.dependencies import close_scan_queue
 

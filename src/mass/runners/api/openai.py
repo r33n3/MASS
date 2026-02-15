@@ -53,6 +53,7 @@ class OpenAIRunner(BaseRunner):
         self.max_tokens = max_tokens
 
         self._client = None
+        self._async_client = None
 
     def _get_client(self) -> Any:
         """Get or create OpenAI client."""
@@ -193,15 +194,15 @@ class OpenAIRunner(BaseRunner):
         start_time = time.time()
 
         try:
-            from openai import AsyncOpenAI
-
-            client_kwargs = {}
-            if self.api_key:
-                client_kwargs["api_key"] = self.api_key
-            if self.base_url:
-                client_kwargs["base_url"] = self.base_url
-
-            client = AsyncOpenAI(**client_kwargs)
+            if self._async_client is None:
+                from openai import AsyncOpenAI
+                client_kwargs = {}
+                if self.api_key:
+                    client_kwargs["api_key"] = self.api_key
+                if self.base_url:
+                    client_kwargs["base_url"] = self.base_url
+                self._async_client = AsyncOpenAI(**client_kwargs)
+            client = self._async_client
 
             messages_override = kwargs.get("messages")
             if messages_override:
