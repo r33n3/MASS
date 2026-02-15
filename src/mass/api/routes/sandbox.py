@@ -333,6 +333,33 @@ async def delete_sandbox_job(job_id: str, tenant: CurrentTenantDep) -> None:
     await _sandbox_store.delete(job_id)
 
 
+# ─── Dead-Letter Queue Endpoints ─────────────────────────────────────
+
+
+@router.get(
+    "/dlq",
+    summary="List dead-letter queue entries",
+)
+async def list_sandbox_dlq(tenant: CurrentTenantDep) -> list[dict]:
+    """List failed sandbox jobs in the dead-letter queue."""
+    return await _sandbox_store.list_dlq(limit=50)
+
+
+@router.post(
+    "/dlq/{job_id}/retry",
+    summary="Retry a failed sandbox job from the DLQ",
+)
+async def retry_sandbox_from_dlq(
+    job_id: str,
+    tenant: CurrentTenantDep,
+) -> dict:
+    """Move a DLQ entry back to active state for retry."""
+    data = await _sandbox_store.retry_from_dlq(job_id)
+    if not data:
+        raise HTTPException(status_code=404, detail="DLQ entry not found")
+    return {"status": "retried", "job_id": job_id, "data": data}
+
+
 # ─── Scenario Endpoints ──────────────────────────────────────────────
 
 @router.get(
@@ -2124,6 +2151,9 @@ async def _execute_sandbox(job_id: str, scenario: Any = None) -> None:
             ))
         except Exception:
             pass
+
+        # Move to dead-letter queue for later review/retry
+        await _sandbox_store.move_to_dlq(job_id, str(e))
 
         await _broadcast_sandbox_update(
             job_id, status="failed", error=str(e),

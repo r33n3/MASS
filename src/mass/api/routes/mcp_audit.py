@@ -321,6 +321,33 @@ async def check_docker_status(tenant: CurrentTenantDep) -> dict:
     }
 
 
+# ── Dead-letter queue endpoints ───────────────────────────────────────
+
+
+@router.get(
+    "/dlq",
+    summary="List dead-letter queue entries",
+)
+async def list_audit_dlq(tenant: CurrentTenantDep) -> list[dict]:
+    """List failed audit jobs in the dead-letter queue."""
+    return await _store.list_dlq(limit=50)
+
+
+@router.post(
+    "/dlq/{job_id}/retry",
+    summary="Retry a failed audit from the DLQ",
+)
+async def retry_audit_from_dlq(
+    job_id: str,
+    tenant: CurrentTenantDep,
+) -> dict:
+    """Move a DLQ entry back to active state for retry."""
+    data = await _store.retry_from_dlq(job_id)
+    if not data:
+        raise HTTPException(status_code=404, detail="DLQ entry not found")
+    return {"status": "retried", "job_id": job_id, "data": data}
+
+
 # ── Background task ───────────────────────────────────────────────────
 
 
@@ -471,6 +498,10 @@ async def _run_audit(audit_id: str) -> None:
             except Exception as e:
                 logger.warning("Cleanup failed for audit %s: %s", audit_id, e)
             pass  # container cleaned up
+
+        # Move failed jobs to dead-letter queue for later review
+        if job.get("status") == "failed":
+            await _store.move_to_dlq(audit_id, job.get("error", "unknown"))
 
         await _broadcast_audit_update(audit_id, job)
 
