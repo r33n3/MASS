@@ -93,7 +93,7 @@ class PackageUpdate(BaseModel):
 
 
 class PackageResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     id: str
     name: str
@@ -140,7 +140,7 @@ class SBOMGenerateRequest(BaseModel):
 
 
 class SBOMResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     id: str
     format: SBOMFormat
@@ -179,7 +179,7 @@ class ModelVerifyRequest(BaseModel):
 
 
 class ModelVerifyResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     job_id: str
     status: str
@@ -202,7 +202,7 @@ class ModelVerifyResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 class VulnerabilityResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     id: str
     cve_id: str | None = None
@@ -247,7 +247,7 @@ class SupplyChainScanRequest(BaseModel):
 
 
 class SupplyChainScanResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     job_id: str
     status: str
@@ -261,6 +261,36 @@ class SupplyChainScanResponse(BaseModel):
     error: str | None = None
     created_at: str
     completed_at: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Module status
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Dependency file parsing
+# ---------------------------------------------------------------------------
+
+class ParseDependenciesRequest(BaseModel):
+    """Parse dependency files from a project directory."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    directory: str = Field(..., description="Path to project directory to scan")
+    auto_register: bool = Field(
+        default=True,
+        description="Automatically register discovered packages for tracking",
+    )
+
+
+class ParseDependenciesResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    parsed_files: list[str] = Field(default_factory=list)
+    total_packages: int = 0
+    registered: int = 0
+    skipped: int = 0
+    packages: list[dict] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

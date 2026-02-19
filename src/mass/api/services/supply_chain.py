@@ -9,6 +9,8 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
+import tomllib
 from datetime import datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
@@ -810,3 +812,150 @@ async def list_vulnerabilities(
         all_items = [v for v in all_items if v.get("severity") == severity]
     total = len(all_items)
     return all_items[offset : offset + limit], total
+
+
+# ---------------------------------------------------------------------------
+# Dependency file parsing — auto-extract packages from project files
+# ---------------------------------------------------------------------------
+
+import re
+import tomllib
+
+
+def _parse_requirements_txt(content: str) -> list[dict]:
+    """Parse requirements.txt content into package dicts."""
+    packages = []
+    for line in content.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or line.startswith("-"):
+            continue
+        # Handle: package==1.0, package>=1.0, package~=1.0, package
+        match = re.match(r"^([A-Za-z0-9_.-]+)\s*([>=<~!]+\s*[\d.*]+)?", line)
+        if match:
+            name = match.group(1).lower().replace("_", "-")
+            version_spec = match.group(2) or ""
+            version = re.sub(r"[>=<~!]+\s*", "", version_spec).strip() or "unknown"
+            packages.append({"name": name, "version": version, "ecosystem": "pypi", "is_direct": True})
+    return packages
+
+
+def _parse_pyproject_toml(content: str) -> list[dict]:
+    """Parse pyproject.toml content into package dicts."""
+    packages = []
+    try:
+        data = tomllib.loads(content)
+    except Exception:
+        return packages
+    deps = data.get("project", {}).get("dependencies", [])
+    if isinstance(deps, list):
+        for dep in deps:
+            match = re.match(r"^([A-Za-z0-9_.-]+)\s*([>=<~!]+\s*[\d.*]+)?", dep)
+            if match:
+                name = match.group(1).lower().replace("_", "-")
+                version_spec = match.group(2) or ""
+                version = re.sub(r"[>=<~!]+\s*", "", version_spec).strip() or "unknown"
+                packages.append({"name": name, "version": version, "ecosystem": "pypi", "is_direct": True})
+    # Also check optional-dependencies
+    for group_deps in data.get("project", {}).get("optional-dependencies", {}).values():
+        if isinstance(group_deps, list):
+            for dep in group_deps:
+                match = re.match(r"^([A-Za-z0-9_.-]+)\s*([>=<~!]+\s*[\d.*]+)?", dep)
+                if match:
+                    name = match.group(1).lower().replace("_", "-")
+                    packages.append({"name": name, "version": "unknown", "ecosystem": "pypi", "is_direct": False})
+    return packages
+
+
+def _parse_package_json(content: str) -> list[dict]:
+    """Parse package.json content into package dicts."""
+    packages = []
+    try:
+        data = json.loads(content)
+    except Exception:
+        return packages
+    for section, is_direct in [("dependencies", True), ("devDependencies", False)]:
+        for name, version in data.get(section, {}).items():
+            clean_ver = re.sub(r"[\^~>=<]", "", version).strip() or "unknown"
+            packages.append({"name": name, "version": clean_ver, "ecosystem": "npm", "is_direct": is_direct})
+    return packages
+
+
+async def parse_dependency_files(
+    tenant_id: str,
+    directory: str,
+    auto_register: bool = True,
+) -> dict:
+    """Parse dependency files in a directory and optionally register packages.
+
+    Scans for requirements.txt, pyproject.toml, package.json, and
+    auto-registers discovered packages for the tenant.
+
+    Args:
+        tenant_id: Tenant ID.
+        directory: Directory path to scan.
+        auto_register: If True, create package records for discovered deps.
+
+    Returns:
+        Dict with parsed_files, total_packages, registered, skipped.
+    """
+    dir_path = Path(directory)
+    parsed_files: list[str] = []
+    all_packages: list[dict] = []
+
+    # Scan for dependency files (up to 2 levels deep)
+    dep_file_patterns = {
+        "requirements*.txt": _parse_requirements_txt,
+        "pyproject.toml": _parse_pyproject_toml,
+        "package.json": _parse_package_json,
+    }
+
+    for pattern, parser in dep_file_patterns.items():
+        for dep_file in dir_path.glob(pattern):
+            try:
+                content = dep_file.read_text(encoding="utf-8", errors="replace")
+                pkgs = parser(content)
+                if pkgs:
+                    parsed_files.append(str(dep_file.relative_to(dir_path)))
+                    all_packages.extend(pkgs)
+            except Exception as exc:
+                logger.debug("Failed to parse %s: %s", dep_file, exc)
+        # Also check one level deep
+        for dep_file in dir_path.glob(f"*/{pattern}"):
+            try:
+                content = dep_file.read_text(encoding="utf-8", errors="replace")
+                pkgs = parser(content)
+                if pkgs:
+                    parsed_files.append(str(dep_file.relative_to(dir_path)))
+                    all_packages.extend(pkgs)
+            except Exception as exc:
+                logger.debug("Failed to parse %s: %s", dep_file, exc)
+
+    # Deduplicate by (name, ecosystem)
+    seen = set()
+    unique_packages = []
+    for pkg in all_packages:
+        key = (pkg["name"], pkg["ecosystem"])
+        if key not in seen:
+            seen.add(key)
+            unique_packages.append(pkg)
+
+    registered = 0
+    skipped = 0
+    if auto_register:
+        existing, _ = await list_packages(tenant_id=tenant_id, limit=10000)
+        existing_keys = {(p["name"], p.get("ecosystem", "")) for p in existing}
+        for pkg in unique_packages:
+            key = (pkg["name"], pkg.get("ecosystem", ""))
+            if key in existing_keys:
+                skipped += 1
+                continue
+            await create_package(tenant_id, pkg)
+            registered += 1
+
+    return {
+        "parsed_files": parsed_files,
+        "total_packages": len(unique_packages),
+        "registered": registered,
+        "skipped": skipped,
+        "packages": unique_packages,
+    }

@@ -18,6 +18,8 @@ from mass.api.schemas.supply_chain import (
     PackageListResponse,
     PackageResponse,
     PackageUpdate,
+    ParseDependenciesRequest,
+    ParseDependenciesResponse,
     SBOMGenerateRequest,
     SBOMListResponse,
     SBOMResponse,
@@ -327,6 +329,32 @@ async def list_scans(
         offset=pagination.offset,
     )
     return [SupplyChainScanResponse(**s) for s in items]
+
+
+# ---------------------------------------------------------------------------
+# Dependency file parsing
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/parse-dependencies",
+    response_model=ParseDependenciesResponse,
+    summary="Parse dependency files",
+    description=(
+        "Scan a project directory for dependency files (requirements.txt, "
+        "pyproject.toml, package.json) and optionally register discovered "
+        "packages for supply chain tracking."
+    ),
+)
+async def parse_dependencies(
+    body: ParseDependenciesRequest,
+    tenant: CurrentTenantDep,
+) -> ParseDependenciesResponse:
+    result = await svc.parse_dependency_files(
+        tenant_id=tenant.tenant_id,
+        directory=body.directory,
+        auto_register=body.auto_register,
+    )
+    return ParseDependenciesResponse(**result)
 
 
 # ---------------------------------------------------------------------------
