@@ -44,7 +44,6 @@ class TenantRepository(BaseRepository[Tenant]):
         stmt = (
             select(Tenant)
             .where(Tenant.is_active == True)
-            .where(Tenant.is_deleted == False)
             .offset(offset)
             .limit(limit)
         )
@@ -92,7 +91,6 @@ class UserRepository(BaseRepository[User]):
         stmt = (
             select(User)
             .where(User.tenant_id == tenant_id)
-            .where(User.is_deleted == False)
         )
         if not include_inactive:
             stmt = stmt.where(User.is_active == True)
@@ -111,7 +109,7 @@ class UserRepository(BaseRepository[User]):
         """
         from datetime import datetime, timezone
 
-        return await self.update(user, last_login_at=datetime.now(timezone.utc))
+        return await self.update(user, last_login=datetime.now(timezone.utc))
 
 
 # class RoleRepository(BaseRepository[Role]):
@@ -181,7 +179,6 @@ class APIKeyRepository(BaseRepository[APIKey]):
         )
         if not include_revoked:
             stmt = stmt.where(APIKey.is_active == True)
-            stmt = stmt.where(APIKey.revoked_at == None)
         stmt = stmt.offset(offset).limit(limit)
         result = await self.session.execute(stmt)
         return result.scalars().all()
@@ -211,10 +208,18 @@ class APIKeyRepository(BaseRepository[APIKey]):
         Returns:
             Revoked API key.
         """
-        from datetime import datetime, timezone
-
         return await self.update(
             api_key,
             is_active=False,
-            revoked_at=datetime.now(timezone.utc),
         )
+
+    async def count_by_tenant(self, tenant_id: str) -> int:
+        """Count API keys for a tenant.
+
+        Args:
+            tenant_id: Tenant ID.
+
+        Returns:
+            Number of active API keys.
+        """
+        return await self.count(tenant_id=tenant_id, is_active=True)
