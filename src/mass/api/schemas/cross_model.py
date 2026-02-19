@@ -104,7 +104,7 @@ class CategoryComparison(BaseModel):
 
 
 class ComparisonResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     id: str
     name: str = ""
