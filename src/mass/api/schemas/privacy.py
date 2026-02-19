@@ -98,7 +98,7 @@ class PIARequest(BaseModel):
 
 
 class PIAFinding(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     id: str
     category: str
@@ -114,7 +114,7 @@ class PIAFinding(BaseModel):
 
 
 class PIAResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     id: str
     status: str
@@ -161,6 +161,39 @@ class PIIExposureResponse(BaseModel):
 # Data flow mapping
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# PII Content Scanning
+# ---------------------------------------------------------------------------
+
+class PIIScanRequest(BaseModel):
+    """Scan text content for PII patterns."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    content: str = Field(..., min_length=1, description="Text content to scan")
+    content_type: str = Field(
+        default="text",
+        description="Content type: text, prompt, code, config",
+    )
+
+
+class PIIScanResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    content_type: str = "text"
+    pii_detected: bool = False
+    categories_found: list[str] = Field(default_factory=list)
+    high_risk_categories: list[str] = Field(default_factory=list)
+    total_categories: int = 0
+    total_matches: int = 0
+    risk_level: RiskLevel = Field(default=RiskLevel.MINIMAL)
+    details: dict[str, int] = Field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# Data flow mapping
+# ---------------------------------------------------------------------------
+
 class DataFlowCreate(BaseModel):
     """Map a data flow for privacy analysis."""
 
@@ -198,7 +231,7 @@ class DataFlowUpdate(BaseModel):
 
 
 class DataFlowResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     id: str
     name: str
@@ -253,7 +286,7 @@ class ControlResult(BaseModel):
 
 
 class FrameworkCheckResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     id: str
     framework: PrivacyFramework

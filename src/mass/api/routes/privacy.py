@@ -23,6 +23,8 @@ from mass.api.schemas.privacy import (
     PIARequest,
     PIAResponse,
     PIIExposureResponse,
+    PIIScanRequest,
+    PIIScanResponse,
     PrivacyStatusResponse,
 )
 from mass.api.services import privacy as svc
@@ -120,6 +122,31 @@ async def get_pii_exposure(
 ) -> PIIExposureResponse:
     result = await svc.get_pii_exposure(tenant.tenant_id, scan_id)
     return PIIExposureResponse(**result)
+
+
+# ---------------------------------------------------------------------------
+# PII Content Scanning
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/pii-scan",
+    response_model=PIIScanResponse,
+    summary="Scan text for PII",
+    description=(
+        "Scan text content for PII patterns using regex and keyword detection. "
+        "Detects SSN, credit cards, emails, phone numbers, and other PII types."
+    ),
+)
+async def scan_for_pii(
+    body: PIIScanRequest,
+    tenant: CurrentTenantDep,
+) -> PIIScanResponse:
+    result = await svc.scan_content_for_pii(
+        tenant_id=tenant.tenant_id,
+        content=body.content,
+        content_type=body.content_type,
+    )
+    return PIIScanResponse(**result)
 
 
 # ---------------------------------------------------------------------------

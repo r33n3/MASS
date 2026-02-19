@@ -7,6 +7,7 @@ Per ARCHITECTURE.md Section 8.1 — Privacy module slot.
 """
 
 import logging
+import re
 from datetime import datetime, timedelta
 from uuid import uuid4
 
@@ -361,23 +362,48 @@ async def _analyze_pii_exposure(tenant_id: str, scan_id: str) -> dict:
         "severity_distribution": {},
     }
 
-    try:
-        from mass.api.dependencies import get_finding_repository, get_db
-        # Use the JobStore-based approach for compatibility
-        # The findings may be in Redis or DB depending on scan type
-    except ImportError:
-        pass
-
-    # Scan through finding-like data in the scan store
-    # For PIAs, we check both direct PII findings and inferred PII
-    # This uses keyword-based PII detection on finding text
     pii_cats_found: set[str] = set()
     exposure_by_cat: dict[str, int] = {}
     exposure_by_comp: dict[str, int] = {}
     severity_dist: dict[str, int] = {}
 
-    # Note: In production, this would query the FindingRepository directly.
-    # For now, we provide the infrastructure for PII scanning.
+    try:
+        from mass.storage.database import get_session
+        from mass.storage.repositories.finding import FindingRepository
+
+        async with get_session() as session:
+            repo = FindingRepository(session)
+            findings = await repo.list(offset=0, limit=10000, scan_id=scan_id)
+
+            for finding in findings:
+                text = " ".join(filter(None, [
+                    getattr(finding, "title", ""),
+                    getattr(finding, "description", ""),
+                    str(getattr(finding, "evidence", "") or ""),
+                    str(getattr(finding, "remediation", "") or ""),
+                ])).lower()
+
+                found_cats: set[str] = set()
+                for cat, keywords in PII_KEYWORDS.items():
+                    if any(kw in text for kw in keywords):
+                        found_cats.add(cat)
+
+                # Also run regex patterns on the text
+                for cat, matches in scan_text_for_pii(text).items():
+                    if matches:
+                        found_cats.add(cat)
+
+                if found_cats:
+                    result["total_findings_with_pii"] += 1
+                    pii_cats_found.update(found_cats)
+                    sev = getattr(finding, "severity", "medium") or "medium"
+                    severity_dist[sev] = severity_dist.get(sev, 0) + 1
+                    component = getattr(finding, "category", "general") or "general"
+                    exposure_by_comp[component] = exposure_by_comp.get(component, 0) + 1
+                    for cat in found_cats:
+                        exposure_by_cat[cat] = exposure_by_cat.get(cat, 0) + 1
+    except Exception as exc:
+        logger.debug("PII exposure analysis fallback: %s", exc)
 
     result["pii_categories_found"] = sorted(pii_cats_found)
     result["high_risk_pii"] = sum(
@@ -388,6 +414,98 @@ async def _analyze_pii_exposure(tenant_id: str, scan_id: str) -> dict:
     result["severity_distribution"] = severity_dist
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Regex-based PII pattern detection
+# ---------------------------------------------------------------------------
+
+PII_PATTERNS: dict[str, re.Pattern] = {
+    "ssn": re.compile(r"\b\d{3}-\d{2}-\d{4}\b"),
+    "credit_card": re.compile(
+        r"\b(?:4\d{3}|5[1-5]\d{2}|3[47]\d{2}|6(?:011|5\d{2}))"
+        r"[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b"
+    ),
+    "email": re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b"),
+    "phone": re.compile(r"\b(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b"),
+    "ip_address": re.compile(
+        r"\b(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}"
+        r"(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\b"
+    ),
+    "date_of_birth": re.compile(
+        r"\b(?:0[1-9]|1[0-2])[/.-](?:0[1-9]|[12]\d|3[01])[/.-]"
+        r"(?:19|20)\d{2}\b"
+    ),
+    "passport": re.compile(r"\b[A-Z]{1,2}\d{6,9}\b"),
+    "financial": re.compile(r"\b(?:IBAN\s?)?[A-Z]{2}\d{2}[\s]?[\dA-Z]{4}[\s]?[\dA-Z]{4,30}\b"),
+}
+
+
+def scan_text_for_pii(text: str) -> dict[str, list[str]]:
+    """Scan text content for PII patterns using regex.
+
+    Returns dict mapping PII category to list of matched patterns (redacted).
+    """
+    results: dict[str, list[str]] = {}
+    for cat, pattern in PII_PATTERNS.items():
+        matches = pattern.findall(text)
+        if matches:
+            # Redact matches for safety — keep first/last chars only
+            redacted = []
+            for m in matches[:10]:  # cap at 10
+                if len(m) > 4:
+                    redacted.append(f"{m[:2]}***{m[-2:]}")
+                else:
+                    redacted.append("***")
+            results[cat] = redacted
+    return results
+
+
+async def scan_content_for_pii(
+    tenant_id: str,
+    content: str,
+    content_type: str = "text",
+) -> dict:
+    """Scan arbitrary text content for PII patterns.
+
+    Args:
+        tenant_id: Tenant ID.
+        content: Text content to scan.
+        content_type: Type of content (text, prompt, code, config).
+
+    Returns:
+        PII scan result with categories found and risk assessment.
+    """
+    pii_found = scan_text_for_pii(content)
+
+    # Also check keyword-based detection
+    text_lower = content.lower()
+    for cat, keywords in PII_KEYWORDS.items():
+        if any(kw in text_lower for kw in keywords):
+            if cat not in pii_found:
+                pii_found[cat] = ["(keyword match)"]
+
+    categories_found = list(pii_found.keys())
+    high_risk = [c for c in categories_found if c in HIGH_RISK_PII]
+
+    risk_level = "minimal"
+    if high_risk:
+        risk_level = "critical"
+    elif len(categories_found) > 3:
+        risk_level = "high"
+    elif categories_found:
+        risk_level = "medium"
+
+    return {
+        "content_type": content_type,
+        "pii_detected": bool(categories_found),
+        "categories_found": sorted(categories_found),
+        "high_risk_categories": sorted(high_risk),
+        "total_categories": len(categories_found),
+        "total_matches": sum(len(v) for v in pii_found.values()),
+        "risk_level": risk_level,
+        "details": {cat: len(matches) for cat, matches in pii_found.items()},
+    }
 
 
 async def get_pii_exposure(tenant_id: str, scan_id: str | None = None) -> dict:
@@ -678,13 +796,17 @@ def _run_framework_checks(framework: str, pia: dict, existing_findings: list[dic
     """Generate additional PIA findings from framework requirements."""
     findings: list[dict] = []
     controls = FRAMEWORK_CATALOG.get(framework, [])
+    pia_id = pia.get("id", "unknown")
+    base_idx = len(existing_findings)
 
     # Check if PIA itself has been properly completed
     if framework == "gdpr":
         has_pii = pia.get("pii_exposure", {}).get("total_findings_with_pii", 0) > 0
         has_flows = bool(pia.get("data_flows"))
         if has_pii and not has_flows:
+            base_idx += 1
             findings.append({
+                "id": f"PIA-{pia_id[:8]}-FW-{base_idx}",
                 "category": "compliance",
                 "risk_level": "high",
                 "title": "PII detected but no data flows documented",
