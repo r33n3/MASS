@@ -22,6 +22,7 @@ class TargetType(str, Enum):
     INSTRUCTION_FILE = "instruction_file"  # System prompt / instruction text
     MODEL_ENDPOINT = "model_endpoint"      # Remote model API (dynamic only)
     AGENT_ENDPOINT = "agent_endpoint"      # Agent-to-agent communication endpoint
+    BROWSER_AGENT = "browser_agent"        # Browser-embedded chat agent (Playwright)
 
 
 class MCPServerConfig(BaseModel):

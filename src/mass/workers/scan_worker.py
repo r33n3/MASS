@@ -59,6 +59,10 @@ async def handle_full_scan(job: Job) -> dict[str, Any] | None:
 
 async def main() -> None:
     """Main worker loop."""
+    # Load persisted platform settings before MassSettings reads env vars
+    from mass.api.routes.settings import load_platform_settings_into_env
+    load_platform_settings_into_env()
+
     settings = get_settings()
 
     # Configuration from environment

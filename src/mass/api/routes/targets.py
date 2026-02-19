@@ -674,8 +674,8 @@ async def get_target(
 
     meta = _parse_meta(deployment)
 
-    # Get recent scans
-    scans = await scan_repo.list_by_deployment(target_id, limit=10)
+    # Get recent scans (higher limit to ensure non-sandbox scans are included)
+    scans = await scan_repo.list_by_deployment(target_id, limit=30)
     latest_scan = scans[0] if scans else None
 
     # Build scan summary
@@ -1141,3 +1141,251 @@ async def verify_fixes(
         "status": "dispatched",
         "message": "Verification scan started. Poll scan status and then compare results.",
     }
+
+
+# ── Analysis Proposal ──────────────────────────────────────────────────
+
+
+@router.get(
+    "/{target_id}/analysis-proposal",
+    summary="Get analysis proposal",
+    description=(
+        "Returns auto-detected capabilities and recommended analysis "
+        "actions for a target, based on existing metadata."
+    ),
+)
+async def get_analysis_proposal(
+    target_id: str,
+    tenant: CurrentTenantDep,
+    deployment_repo: DeploymentRepo,
+    scan_repo: ScanRepo,
+) -> dict[str, Any]:
+    """Compute an analysis proposal from existing target metadata."""
+    deployment = await deployment_repo.get(target_id)
+    if not deployment or deployment.tenant_id != tenant.tenant_id:
+        raise HTTPException(status_code=404, detail="Target not found")
+
+    meta = _parse_meta(deployment)
+    arch = meta.get("architecture_map") or {}
+    disc = meta.get("discovery") or {}
+    target_type = meta.get("target_type", "deployment")
+
+    # --- Detected capabilities ---
+    frameworks = disc.get("ai_frameworks") or []
+    model_connections = arch.get("model_connections") or []
+    tool_defs = arch.get("tool_definitions") or []
+    entry_points = arch.get("entry_points") or []
+    safety_measures = arch.get("safety_measures") or []
+    system_prompts: list[str] = []
+
+    for mc in model_connections:
+        sp_source = mc.get("system_prompt_source") or mc.get("system_prompt") or ""
+        if sp_source and sp_source not in system_prompts:
+            system_prompts.append(sp_source)
+    if meta.get("system_prompt"):
+        sp = meta["system_prompt"]
+        if sp not in system_prompts:
+            system_prompts.append(sp)
+
+    mcp_servers_raw = meta.get("mcp_servers") or []
+    mcp_tools = [
+        {"name": t.get("name", ""), "source": "mcp"}
+        for t in tool_defs if "mcp" in (t.get("source") or t.get("purpose") or "").lower()
+    ]
+    code_tools = [
+        {"name": t.get("name", ""), "source": "code"}
+        for t in tool_defs if "mcp" not in (t.get("source") or t.get("purpose") or "").lower()
+    ]
+
+    models = [
+        {
+            "provider": mc.get("provider", ""),
+            "model": mc.get("model_name") or mc.get("model", ""),
+            "location": mc.get("call_location", ""),
+        }
+        for mc in model_connections
+    ]
+
+    capabilities = {
+        "frameworks": frameworks,
+        "models": models,
+        "mcp_servers": [
+            {
+                "name": s.get("name", ""),
+                "transport": s.get("transport", "stdio"),
+                "command": s.get("command", ""),
+                "url": s.get("url", ""),
+            }
+            for s in mcp_servers_raw
+        ],
+        "tools": mcp_tools + code_tools,
+        "entry_points": [ep if isinstance(ep, str) else ep.get("file", "") for ep in entry_points[:10]],
+        "system_prompts": [sp[:200] for sp in system_prompts[:5]],
+        "safety_measures": [
+            sm if isinstance(sm, str) else sm.get("description", "")
+            for sm in safety_measures[:10]
+        ],
+    }
+
+    # --- Recommended actions ---
+    has_profile = bool(arch.get("summary"))
+    scans = await scan_repo.list_by_deployment(target_id, limit=5)
+    has_scan = any(s.status == "completed" for s in scans)
+    has_mcp = bool(mcp_servers_raw) or bool(mcp_tools)
+    has_models_detected = bool(models) or bool(meta.get("model_endpoint"))
+    has_prompts = bool(system_prompts)
+    completed_actions = set(meta.get("completed_analysis_actions") or [])
+
+    recommended_profile = disc.get("recommended_profile") or (
+        "comprehensive" if frameworks and disc.get("has_models") else
+        "standard" if frameworks or disc.get("has_models") else
+        "quick"
+    )
+
+    actions: list[dict[str, Any]] = [
+        {
+            "action": "profile",
+            "label": "Profile Architecture",
+            "enabled": not has_profile,
+            "done": has_profile,
+            "reason": "Already profiled" if has_profile else "Analyze code structure and AI components",
+        },
+        {
+            "action": "scan",
+            "label": f"Security Scan ({recommended_profile})",
+            "enabled": not has_scan,
+            "done": has_scan,
+            "profile": recommended_profile,
+            "reason": "Scan completed" if has_scan else f"{recommended_profile} profile recommended",
+        },
+    ]
+
+    if has_mcp:
+        mcp_conf = mcp_servers_raw[0] if mcp_servers_raw else {}
+        mcp_done = "interrogate_mcp" in completed_actions
+        actions.append({
+            "action": "interrogate_mcp",
+            "label": "Interrogate MCP Servers",
+            "enabled": not mcp_done,
+            "done": mcp_done,
+            "config": {
+                "transport": mcp_conf.get("transport", "stdio"),
+                "command": mcp_conf.get("command", ""),
+                "args": mcp_conf.get("args", []),
+                "url": mcp_conf.get("url", ""),
+            },
+            "reason": "MCP interrogation completed" if mcp_done else f"{len(mcp_servers_raw) or len(mcp_tools)} MCP server(s) detected",
+        })
+
+    if has_models_detected:
+        mc = models[0] if models else {}
+        models_done = "test_models" in completed_actions
+        actions.append({
+            "action": "test_models",
+            "label": "Test Model Endpoints",
+            "enabled": not models_done,
+            "done": models_done,
+            "config": {
+                "provider": mc.get("provider") or meta.get("model_provider", ""),
+                "model": mc.get("model") or meta.get("model_name", ""),
+                "endpoint": meta.get("model_endpoint", ""),
+            },
+            "reason": "Model testing completed" if models_done else f"{len(models)} model connection(s) in code",
+        })
+
+    if has_prompts:
+        prompts_done = "test_prompts" in completed_actions
+        actions.append({
+            "action": "test_prompts",
+            "label": "Adversarial Prompt Testing",
+            "enabled": not prompts_done,
+            "done": prompts_done,
+            "reason": "Prompt testing completed" if prompts_done else f"{len(system_prompts)} system prompt(s) found",
+        })
+
+    # --- Recommended sandbox scenarios ---
+    scenario_relevance: list[dict[str, str]] = []
+    try:
+        from mass.sandbox.scenario import list_builtin_scenarios
+
+        for sc in list_builtin_scenarios():
+            cat = sc.get("category", "")
+            tags = sc.get("tags") or []
+            relevance = "low"
+            reason = "General security scenario"
+
+            if target_type == "mcp_server" or has_mcp:
+                if "mcp" in cat or "tool" in cat or any("mcp" in t for t in tags):
+                    relevance = "high"
+                    reason = "MCP tools detected"
+            if has_models_detected:
+                if "prompt" in cat or "boundary" in cat or any("prompt" in t for t in tags):
+                    relevance = "high" if relevance != "high" else "high"
+                    reason = "Model endpoint found"
+            if target_type == "agent_endpoint":
+                if "agent" in cat or "routing" in cat or any("agent" in t for t in tags):
+                    relevance = "high"
+                    reason = "Agent endpoint target"
+            if relevance == "low" and (frameworks or disc.get("has_code")):
+                relevance = "medium"
+                reason = "AI deployment detected"
+
+            scenario_relevance.append({
+                "name": sc.get("name", ""),
+                "category": cat,
+                "description": sc.get("description", ""),
+                "tags": tags,
+                "turns_count": sc.get("turns_count", 0),
+                "relevance": relevance,
+                "reason": reason,
+            })
+
+        # Sort: high first, then medium, then low
+        order = {"high": 0, "medium": 1, "low": 2}
+        scenario_relevance.sort(key=lambda s: order.get(s["relevance"], 3))
+    except Exception as exc:
+        logger.warning("Failed to load scenarios for proposal: %s", exc)
+
+    return {
+        "target_id": target_id,
+        "target_type": target_type,
+        "target_name": deployment.name,
+        "detected_capabilities": capabilities,
+        "recommended_actions": actions,
+        "recommended_scenarios": scenario_relevance,
+    }
+
+
+@router.post(
+    "/{target_id}/analysis-action-done",
+    summary="Mark an analysis action as completed",
+    description="Persists that a proposed analysis action has been executed for this target.",
+)
+async def mark_analysis_action_done(
+    target_id: str,
+    body: dict,
+    tenant: CurrentTenantDep,
+    db: DBSession,
+    deployment_repo: DeploymentRepo,
+) -> dict[str, Any]:
+    """Mark one or more analysis actions as completed in deployment metadata."""
+    deployment = await deployment_repo.get(target_id)
+    if not deployment or deployment.tenant_id != tenant.tenant_id:
+        raise HTTPException(status_code=404, detail="Target not found")
+
+    action = body.get("action")
+    actions_list = body.get("actions", [])
+    if action:
+        actions_list.append(action)
+    if not actions_list:
+        raise HTTPException(status_code=400, detail="'action' or 'actions' required")
+
+    meta = _parse_meta(deployment)
+    completed = set(meta.get("completed_analysis_actions") or [])
+    completed.update(actions_list)
+    meta["completed_analysis_actions"] = sorted(completed)
+
+    deployment.meta = json.dumps(meta) if isinstance(meta, dict) else meta
+    await db.commit()
+
+    return {"target_id": target_id, "completed_actions": sorted(completed)}

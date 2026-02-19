@@ -119,6 +119,7 @@ services:
       MASS_DEBUG: "true"
       OLLAMA_HOST: http://ollama:11434
       OLLAMA_ATTACKER_HOST: http://ollama-attacker:11434
+      OLLAMA_CHAT_HOST: ${OLLAMA_CHAT_HOST:-}
       # Chat provider API keys (uncomment and set to enable)
       # OPENAI_API_KEY: "sk-..."
       # ANTHROPIC_API_KEY: "sk-ant-..."
@@ -222,9 +223,18 @@ services:
           memory: 1G
 
   # ============================================
-  # Ollama — Local LLMs for interrogation
-  # Two instances: one for attacker model, one for target model
-  # This prevents model-swap thrashing when both are 8B+
+  # Ollama — Local LLMs
+  # Three dedicated instances to prevent model-swap thrashing and GPU contention:
+  #   ollama          → DESTINATION models (victim / interrogatee)
+  #   ollama-attacker → SOURCE models (interrogator / attacker)
+  #   ollama-chat     → CHAT/UI models (assistant, verification, guardrails)
+  #
+  # When all three use the same GPU, they compete for VRAM. For best results:
+  #   - Use cloud providers (OpenAI, Anthropic, Gemini) for chat features
+  #   - Reserve the two Ollama instances for interrogation
+  #   - Or run ollama-chat on CPU with a smaller model (see OLLAMA_CHAT_HOST)
+  #
+  # See docs/getting-started/configuration.md for details.
   # ============================================
 
   # Ollama instance for DESTINATION models (victim / interrogatee)
@@ -275,6 +285,37 @@ services:
       timeout: 10s
       retries: 5
       start_period: 30s
+
+  # Ollama instance for CHAT models (assistant, verification, guardrails)
+  # Activate with: docker compose --profile chat-ollama up -d
+  # This keeps chat requests from competing with interrogation for GPU.
+  # For CPU-only: set OLLAMA_CHAT_NUM_GPU=0 in .env
+  ollama-chat:
+    image: ollama/ollama
+    container_name: mass-ollama-chat
+    ports:
+      - "11436:11434"
+    volumes:
+      - ollama_chat_data:/root/.ollama
+    environment:
+      OLLAMA_NUM_GPU: ${OLLAMA_CHAT_NUM_GPU:-1}
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+        reservations:
+          memory: 1G
+    networks:
+      - mass-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:11434/api/tags || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    profiles:
+      - chat-ollama
 
   # ============================================
   # Optional Tools (activate with --profile tools)
@@ -351,6 +392,8 @@ volumes:
   ollama_data:
     driver: local
   ollama_attacker_data:
+    driver: local
+  ollama_chat_data:
     driver: local
   github_clones:
     driver: local

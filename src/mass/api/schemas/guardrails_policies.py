@@ -73,6 +73,10 @@ class GuardrailItem(BaseModel):
     implementation_steps: list[str] = Field(default_factory=list)
     code_examples: dict[str, str] = Field(default_factory=dict)
     configuration_examples: dict[str, str] = Field(default_factory=dict)
+    platform_configs: dict[str, str] = Field(
+        default_factory=dict,
+        description="Platform-specific YAML configs (e.g. aws_bedrock, litellm)",
+    )
     mitigates: list[str] = Field(default_factory=list)
     compliance: list[str] = Field(default_factory=list)
     effort: str = "medium"
@@ -81,18 +85,41 @@ class GuardrailItem(BaseModel):
 
 
 class PolicyItem(BaseModel):
-    """An organizational policy recommendation."""
+    """An organizational policy recommendation aligned to AI governance frameworks."""
 
     model_config = ConfigDict(extra="ignore")
 
     name: str = ""
     owner_group: str = "Security"
     description: str = ""
+    policy_category: str = Field(
+        default="governance",
+        description=(
+            "Category: governance, risk_management, compliance, "
+            "technical_controls, incident_response, data_protection, "
+            "model_lifecycle, monitoring"
+        ),
+    )
     assets_covered: list[str] = Field(default_factory=list)
     violation_severity: str = "medium"
     original_severity: str = ""
     severity_adjusted: bool = False
     remediation_actions: list[str] = Field(default_factory=list)
+    framework_mappings: dict[str, list[str]] = Field(
+        default_factory=dict,
+        description=(
+            "Maps framework name to control IDs. Keys: nist_ai_rmf, "
+            "iso_42001, eu_ai_act, owasp_llm_top10, mitre_atlas"
+        ),
+    )
+    review_frequency: str = Field(
+        default="quarterly",
+        description="How often this policy should be reviewed: quarterly, semi_annual, annual",
+    )
+    implementation_priority: str = Field(
+        default="short_term",
+        description="When to implement: immediate, short_term, medium_term, long_term",
+    )
     related_findings: list[str] = Field(default_factory=list)
     source: str = "ai_generated"
 

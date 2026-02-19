@@ -97,7 +97,7 @@ class ChatRequest(BaseModel):
     )
     model: str | None = Field(
         default=None,
-        description="Model name (e.g., llama3.2:1b, gpt-4o, claude-sonnet-4-5-20250929). Defaults per provider.",
+        description="Model name (e.g., llama3.2:1b, gpt-4o, claude-sonnet-4-6). Defaults per provider.",
     )
     endpoint: str | None = Field(
         default=None,
@@ -115,11 +115,21 @@ class ChatRequest(BaseModel):
         default=0.7,
         ge=0.0,
         le=2.0,
-        description="Sampling temperature",
+        description="Sampling temperature. Clamped per provider (Anthropic: 0-1). Ignored for reasoning models (o-series, GPT-5).",
+    )
+    max_tokens: int | None = Field(
+        default=None,
+        ge=1,
+        le=65536,
+        description="Max tokens in response. Default varies by provider (Ollama/OpenAI: 4096, Anthropic/Gemini: 8192). For reasoning models, maps to max_completion_tokens.",
     )
     enable_tools: bool = Field(
         default=True,
         description="Enable tool calling (search, findings, scans, stats). Requires model support.",
+    )
+    file_context: str | None = Field(
+        default=None,
+        description="Optional file path and content to include as context for the conversation.",
     )
 
 
@@ -151,9 +161,19 @@ class ChatProvidersResponse(BaseModel):
 # Canonical defaults live in mass.api.utils.llm_config.PROVIDER_DEFAULTS.
 # Chat overrides the Ollama endpoint to use the attacker host.
 
-from mass.api.utils.llm_config import PROVIDER_DEFAULTS, resolve_llm_config, resolve_api_key
+from mass.api.utils.llm_config import (
+    PROVIDER_DEFAULTS,
+    adjust_params_for_model,
+    resolve_api_key,
+    resolve_llm_config,
+)
 
-_CHAT_OLLAMA_ENDPOINT_ENV = "OLLAMA_ATTACKER_HOST"
+# Chat Ollama resolution order:
+# 1. OLLAMA_CHAT_HOST (dedicated chat instance — recommended when using --profile chat-ollama)
+# 2. OLLAMA_ATTACKER_HOST (shared with interrogation attacker — default)
+# 3. Fallback to ollama-attacker:11434
+_CHAT_OLLAMA_ENDPOINT_ENV = "OLLAMA_CHAT_HOST"
+_CHAT_OLLAMA_ENDPOINT_ENV_FALLBACK = "OLLAMA_ATTACKER_HOST"
 _CHAT_OLLAMA_ENDPOINT_FALLBACK = "http://ollama-attacker:11434"
 
 
@@ -168,11 +188,16 @@ async def _chat_ollama(
 ) -> dict[str, Any]:
     """Send chat to Ollama."""
     url = f"{endpoint.rstrip('/')}/api/chat"
+    options: dict[str, Any] = {"temperature": temperature}
+    # Ollama uses num_predict for max output tokens
+    max_tok = kwargs.get("max_tokens")
+    if max_tok:
+        options["num_predict"] = max_tok
     payload = {
         "model": model,
         "messages": messages,
         "stream": False,
-        "options": {"temperature": temperature},
+        "options": options,
     }
 
     async with httpx.AsyncClient(timeout=300.0) as client:
@@ -200,21 +225,65 @@ async def _chat_openai_compatible(
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
-    payload = {
+
+    # Model-aware parameter adjustment (reasoning models need different params)
+    params = adjust_params_for_model("openai", model, temperature, kwargs.get("max_tokens"))
+
+    # Reasoning models (o-series, GPT-5) require "developer" role instead of "system"
+    api_messages = messages
+    if params.get("is_reasoning"):
+        api_messages = []
+        for msg in messages:
+            if msg["role"] == "system":
+                api_messages.append({"role": "developer", "content": msg["content"]})
+            else:
+                api_messages.append(msg)
+
+    payload: dict[str, Any] = {
         "model": model,
-        "messages": messages,
-        "temperature": temperature,
+        "messages": api_messages,
     }
+    if not params.get("skip_temperature"):
+        payload["temperature"] = params.get("temperature", temperature)
+    # Use correct max_tokens key for the model
+    payload[str(params["max_tokens_key"])] = params["max_tokens_value"]
+
+    import logging as _logging
+    _chat_logger = _logging.getLogger(__name__)
 
     async with httpx.AsyncClient(timeout=120.0) as client:
         resp = await client.post(url, json=payload, headers=headers)
         resp.raise_for_status()
         data = resp.json()
 
-    choice = data.get("choices", [{}])[0]
-    content = choice.get("message", {}).get("content", "")
-    usage = data.get("usage", {})
-    tokens = usage.get("total_tokens", 0)
+    # Log raw response keys for debugging reasoning model responses
+    _chat_logger.debug("OpenAI raw response keys: %s", list(data.keys()))
+
+    # GPT-5 / o-series reasoning models may use "output" instead of "choices"
+    content = ""
+    tokens = 0
+
+    if "choices" in data:
+        choice = data["choices"][0] if data["choices"] else {}
+        content = choice.get("message", {}).get("content", "")
+        tokens = data.get("usage", {}).get("total_tokens", 0)
+    elif "output" in data:
+        # New OpenAI Responses API format (GPT-5, o-series)
+        for item in data.get("output", []):
+            if item.get("type") == "message":
+                for part in item.get("content", []):
+                    if part.get("type") == "output_text":
+                        content += part.get("text", "")
+                    elif part.get("type") == "text":
+                        content += part.get("text", "")
+        tokens = data.get("usage", {}).get("total_tokens", 0)
+
+    if not content:
+        # Last resort: log the full response structure for debugging
+        _chat_logger.warning(
+            "OpenAI returned empty content for model=%s. Response keys=%s, full=%s",
+            model, list(data.keys()), str(data)[:1000],
+        )
 
     return {"content": content, "tokens": tokens}
 
@@ -244,11 +313,13 @@ async def _chat_anthropic(
         else:
             api_messages.append({"role": msg["role"], "content": msg["content"]})
 
+    # Model-aware parameter adjustment (Anthropic: temp clamped to 0-1, higher max_tokens)
+    params = adjust_params_for_model("anthropic", model, temperature, kwargs.get("max_tokens"))
     payload: dict[str, Any] = {
         "model": model,
         "messages": api_messages,
-        "max_tokens": 4096,
-        "temperature": temperature,
+        "max_tokens": params["max_tokens_value"],
+        "temperature": params.get("temperature", min(temperature, 1.0)),
     }
     if system_text.strip():
         payload["system"] = system_text.strip()
@@ -287,9 +358,13 @@ async def _chat_gemini(
             role = "user" if msg["role"] == "user" else "model"
             contents.append({"role": role, "parts": [{"text": msg["content"]}]})
 
+    gen_config: dict[str, Any] = {"temperature": temperature}
+    max_tok = kwargs.get("max_tokens")
+    if max_tok:
+        gen_config["maxOutputTokens"] = max_tok
     payload: dict[str, Any] = {
         "contents": contents,
-        "generationConfig": {"temperature": temperature},
+        "generationConfig": gen_config,
     }
     if system_text.strip():
         payload["systemInstruction"] = {"parts": [{"text": system_text.strip()}]}
@@ -354,6 +429,7 @@ async def _raw_openai(
     api_key: str,
     temperature: float,
     tools: list[dict[str, Any]],
+    max_tokens: int | None = None,
 ) -> dict[str, Any]:
     """Send chat via OpenAI-compatible API and return raw response."""
     url = f"{endpoint.rstrip('/')}/chat/completions"
@@ -361,11 +437,26 @@ async def _raw_openai(
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
+    # Model-aware parameter adjustment for reasoning models
+    params = adjust_params_for_model("openai", model, temperature, max_tokens)
+
+    # Reasoning models require "developer" role instead of "system"
+    api_messages = messages
+    if params.get("is_reasoning"):
+        api_messages = []
+        for msg in messages:
+            if msg.get("role") == "system":
+                api_messages.append({**msg, "role": "developer"})
+            else:
+                api_messages.append(msg)
+
     payload: dict[str, Any] = {
         "model": model,
-        "messages": messages,
-        "temperature": temperature,
+        "messages": api_messages,
     }
+    if not params.get("skip_temperature"):
+        payload["temperature"] = params.get("temperature", temperature)
+    payload[str(params["max_tokens_key"])] = params["max_tokens_value"]
     if tools:
         payload["tools"] = tools
         payload["tool_choice"] = "auto"
@@ -383,6 +474,7 @@ async def _raw_anthropic(
     api_key: str,
     temperature: float,
     tools: list[dict[str, Any]],
+    max_tokens: int | None = None,
 ) -> dict[str, Any]:
     """Send chat via Anthropic Messages API and return raw response."""
     url = f"{endpoint.rstrip('/')}/v1/messages"
@@ -403,11 +495,13 @@ async def _raw_anthropic(
         else:
             api_messages.append(msg)
 
+    # Model-aware parameter adjustment
+    params = adjust_params_for_model("anthropic", model, temperature, max_tokens)
     payload: dict[str, Any] = {
         "model": model,
         "messages": api_messages,
-        "max_tokens": 4096,
-        "temperature": temperature,
+        "max_tokens": params["max_tokens_value"],
+        "temperature": params.get("temperature", min(temperature, 1.0)),
     }
     if system_text.strip():
         payload["system"] = system_text.strip()
@@ -468,14 +562,15 @@ async def _call_provider_raw(
     api_key: str,
     temperature: float,
     tools: list[dict[str, Any]],
+    max_tokens: int | None = None,
 ) -> dict[str, Any]:
     """Dispatch a raw (tool-enabled) chat call to the right provider."""
     if provider == "ollama":
         return await _raw_ollama(messages, model, endpoint, temperature, tools)
     elif provider in ("openai", "grok"):
-        return await _raw_openai(messages, model, endpoint, api_key, temperature, tools)
+        return await _raw_openai(messages, model, endpoint, api_key, temperature, tools, max_tokens=max_tokens)
     elif provider == "anthropic":
-        return await _raw_anthropic(messages, model, endpoint, api_key, temperature, tools)
+        return await _raw_anthropic(messages, model, endpoint, api_key, temperature, tools, max_tokens=max_tokens)
     elif provider == "gemini":
         return await _raw_gemini(messages, model, endpoint, api_key, temperature, tools)
     else:
@@ -512,11 +607,12 @@ async def chat(
         )
 
     # Resolve configuration via platform defaults
-    # Chat uses OLLAMA_ATTACKER_HOST for Ollama (not OLLAMA_HOST)
+    # Chat Ollama priority: OLLAMA_CHAT_HOST > OLLAMA_ATTACKER_HOST > fallback
     chat_endpoint = request.endpoint
     if not chat_endpoint and provider == "ollama":
         chat_endpoint = (
             os.getenv(_CHAT_OLLAMA_ENDPOINT_ENV, "")
+            or os.getenv(_CHAT_OLLAMA_ENDPOINT_ENV_FALLBACK, "")
             or _CHAT_OLLAMA_ENDPOINT_FALLBACK
         )
 
@@ -525,6 +621,7 @@ async def chat(
         model=request.model,
         api_key=request.api_key,
         endpoint=chat_endpoint,
+        activity="chat",
     )
     provider, model, api_key, endpoint = cfg
     system_prompt = request.system_prompt or MASS_SYSTEM_PROMPT
@@ -553,8 +650,17 @@ async def chat(
         logger.warning("Failed to gather docs context: %s", exc)
         docs_context = ""
 
+    # Gather file context if provided
+    file_ctx = ""
+    if request.file_context:
+        file_ctx = (
+            "\n\n--- FILE CONTEXT (user is asking about this file) ---\n"
+            + request.file_context
+            + "\n--- END FILE CONTEXT ---\n"
+        )
+
     # Combine system prompt with gathered context
-    full_system_prompt = system_prompt + db_context + docs_context
+    full_system_prompt = system_prompt + db_context + docs_context + file_ctx
 
     # Build messages list
     messages: list[dict[str, Any]] = [{"role": "system", "content": full_system_prompt}]
@@ -594,6 +700,7 @@ async def chat(
                 temperature=request.temperature,
                 db=db,
                 tenant_id=tenant.tenant_id,
+                max_tokens=request.max_tokens,
             )
         else:
             # ---- Original text-only path ----
@@ -604,6 +711,7 @@ async def chat(
                     model=model,
                     endpoint=endpoint,
                     temperature=request.temperature,
+                    max_tokens=request.max_tokens,
                 )
             else:
                 result = await handler(
@@ -612,6 +720,7 @@ async def chat(
                     endpoint=endpoint,
                     api_key=api_key,
                     temperature=request.temperature,
+                    max_tokens=request.max_tokens,
                 )
             response_text = result.get("content", "")
             tokens = result.get("tokens", 0)
@@ -663,6 +772,7 @@ async def _chat_with_tools(
     temperature: float,
     db: Any,
     tenant_id: str,
+    max_tokens: int | None = None,
 ) -> tuple[str, int, list[str]]:
     """Run the tool calling loop.
 
@@ -685,11 +795,12 @@ async def _chat_with_tools(
         handler = _PROVIDERS[provider]
         if provider == "ollama":
             result = await handler(messages=messages, model=model,
-                                   endpoint=endpoint, temperature=temperature)
+                                   endpoint=endpoint, temperature=temperature,
+                                   max_tokens=max_tokens)
         else:
             result = await handler(messages=messages, model=model,
                                    endpoint=endpoint, api_key=api_key,
-                                   temperature=temperature)
+                                   temperature=temperature, max_tokens=max_tokens)
         return result.get("content", ""), result.get("tokens", 0), []
 
     executor = ToolExecutor(db, tenant_id)
@@ -701,6 +812,7 @@ async def _chat_with_tools(
         # Call provider with tools
         raw_response = await _call_provider_raw(
             provider, messages, model, endpoint, api_key, temperature, tool_defs,
+            max_tokens=max_tokens,
         )
 
         total_tokens += extract_token_count(provider, raw_response)
@@ -737,6 +849,7 @@ async def _chat_with_tools(
     logger.info("Tool calling loop hit max rounds (%d), making final call", max_rounds)
     raw_response = await _call_provider_raw(
         provider, messages, model, endpoint, api_key, temperature, [],
+        max_tokens=max_tokens,
     )
     total_tokens += extract_token_count(provider, raw_response)
     text = extract_text_content(provider, raw_response)
@@ -780,7 +893,11 @@ async def list_chat_models(
 ) -> dict[str, Any]:
     """List models available for a chat provider."""
     if provider == "ollama":
-        endpoint = os.getenv("OLLAMA_ATTACKER_HOST", "") or os.getenv("OLLAMA_HOST", "http://ollama-attacker:11434")
+        endpoint = (
+            os.getenv("OLLAMA_CHAT_HOST", "")
+            or os.getenv("OLLAMA_ATTACKER_HOST", "")
+            or "http://ollama-attacker:11434"
+        )
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.get(f"{endpoint.rstrip('/')}/api/tags")
@@ -816,6 +933,7 @@ async def get_chat_config(tenant: CurrentTenantDep) -> dict[str, Any]:
     """Return current resolved configuration for Ollama and providers."""
     ollama_dest = os.getenv("OLLAMA_HOST", "") or "http://ollama:11434"
     ollama_attacker = os.getenv("OLLAMA_ATTACKER_HOST", "") or "http://ollama-attacker:11434"
+    ollama_chat = os.getenv("OLLAMA_CHAT_HOST", "")
 
     providers = []
     for name, defaults in PROVIDER_DEFAULTS.items():
@@ -829,5 +947,6 @@ async def get_chat_config(tenant: CurrentTenantDep) -> dict[str, Any]:
     return {
         "ollama_destination_host": ollama_dest,
         "ollama_attacker_host": ollama_attacker,
+        "ollama_chat_host": ollama_chat or "(using attacker instance)",
         "providers": providers,
     }

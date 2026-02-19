@@ -51,6 +51,8 @@ class MCPStaticAnalyzer:
     def __init__(self):
         """Initialize static analyzer."""
         # Dangerous function calls
+        # NOTE: open() excluded — it's a Python builtin used in virtually
+        # every file and generates excessive false positives.
         self._dangerous_calls = {
             "eval": (Severity.CRITICAL, "Code execution via eval"),
             "exec": (Severity.CRITICAL, "Code execution via exec"),
@@ -60,20 +62,20 @@ class MCPStaticAnalyzer:
             "subprocess.call": (Severity.HIGH, "Subprocess execution"),
             "subprocess.run": (Severity.HIGH, "Subprocess execution"),
             "subprocess.Popen": (Severity.HIGH, "Subprocess execution"),
-            "__import__": (Severity.MEDIUM, "Dynamic import"),
-            "open": (Severity.LOW, "File operations"),
+            "__import__": (Severity.LOW, "Dynamic import"),
             "pickle.loads": (Severity.HIGH, "Unsafe deserialization"),
             "yaml.load": (Severity.MEDIUM, "Potentially unsafe YAML loading"),
             "marshal.loads": (Severity.HIGH, "Unsafe deserialization"),
         }
 
         # Dangerous module imports
+        # NOTE: ctypes and socket excluded — they are standard library modules
+        # used legitimately in most applications.  More specific checks
+        # (exfiltration patterns, subprocess calls) catch actual misuse.
         self._dangerous_imports = {
-            "ctypes": (Severity.MEDIUM, "Native code access"),
-            "cffi": (Severity.MEDIUM, "Native code access"),
-            "pickle": (Severity.MEDIUM, "Serialization (can be dangerous)"),
-            "marshal": (Severity.MEDIUM, "Serialization (can be dangerous)"),
-            "socket": (Severity.LOW, "Network access"),
+            "cffi": (Severity.MEDIUM, "Native code access via CFFI"),
+            "pickle": (Severity.MEDIUM, "Serialization (deserialization attacks)"),
+            "marshal": (Severity.MEDIUM, "Serialization (deserialization attacks)"),
         }
 
     def analyze_file(self, file_path: Path | str) -> list[StaticFinding]:
@@ -326,6 +328,15 @@ class MCPStaticAnalyzer:
                             remediation="Add input validation to tool handler",
                         )
 
+    # Function name patterns that indicate actual MCP/LLM tool handlers.
+    # Uses regex with word boundaries to avoid matching "callback",
+    # "toolbar", "install", "recall", etc.
+    _TOOL_HANDLER_NAME_RE = re.compile(
+        r"(?:^|_)(?:tool|handle_tool|call_tool|execute_tool|run_tool|"
+        r"tool_handler|tool_executor)(?:$|_)",
+        re.IGNORECASE,
+    )
+
     def _is_tool_handler(self, node: ast.FunctionDef) -> bool:
         """Check if function is a tool handler.
 
@@ -335,7 +346,7 @@ class MCPStaticAnalyzer:
         Returns:
             True if function appears to be a tool handler.
         """
-        # Check decorators
+        # Check decorators (high confidence — these are explicit markers)
         for decorator in node.decorator_list:
             if isinstance(decorator, ast.Name):
                 if decorator.id in ("tool", "server_tool", "handle_tool"):
@@ -345,8 +356,8 @@ class MCPStaticAnalyzer:
                     if decorator.func.attr in ("tool", "list_tools", "call_tool"):
                         return True
 
-        # Check function name patterns
-        if any(p in node.name.lower() for p in ["tool", "handler", "execute", "call"]):
+        # Check function name with word-boundary-aware patterns
+        if self._TOOL_HANDLER_NAME_RE.search(node.name):
             return True
 
         return False

@@ -317,24 +317,33 @@ class MCPAnalyzer:
                     remediation="Review and sanitize tool description",
                 )
 
-        # Check for dangerous tool names
-        dangerous_names = [
-            "exec", "eval", "shell", "cmd", "system", "run",
-            "sudo", "admin", "root", "delete", "rm", "format",
-        ]
+        # Check for dangerous tool names.
+        # Exact-match names that are always dangerous:
+        _exact_dangerous = {
+            "exec", "eval", "shell", "cmd", "sudo", "rm",
+        }
+        # Word-boundary names that are only dangerous when they appear as
+        # standalone words (separated by _, -, or word boundaries) to avoid
+        # matching "format_output", "system_info", "runtime", etc.
+        _boundary_dangerous = re.compile(
+            r"(?:^|[_\-])(?:system|run|delete|admin|root|format)(?:$|[_\-])",
+            re.IGNORECASE,
+        )
         name_lower = tool_name.lower()
-        for dangerous in dangerous_names:
-            if dangerous in name_lower:
-                yield MCPFinding(
-                    category=MCPRiskCategory.UNSAFE_EXECUTION,
-                    severity=Severity.MEDIUM,
-                    title=f"Potentially dangerous tool name: {tool_name}",
-                    description="Tool name suggests dangerous operations",
-                    server_name=server_name,
-                    tool_name=tool_name,
-                    remediation="Review tool functionality carefully",
-                )
-                break
+        is_dangerous = (
+            name_lower in _exact_dangerous
+            or _boundary_dangerous.search(name_lower)
+        )
+        if is_dangerous:
+            yield MCPFinding(
+                category=MCPRiskCategory.UNSAFE_EXECUTION,
+                severity=Severity.MEDIUM,
+                title=f"Potentially dangerous tool name: {tool_name}",
+                description="Tool name suggests dangerous operations",
+                server_name=server_name,
+                tool_name=tool_name,
+                remediation="Review tool functionality carefully",
+            )
 
         # Check input schema for issues
         input_schema = tool.get("inputSchema", {})

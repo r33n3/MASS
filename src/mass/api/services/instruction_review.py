@@ -148,18 +148,19 @@ async def review_instruction_content(
     review_content = content[:max_chars] if truncated else content
 
     # ── LLM semantic review ──
+    resolved_provider = cfg.provider
     llm_review: dict[str, Any] = {}
     try:
         prompt = _REVIEW_PROMPT.format(content=review_content)
 
-        if provider == "ollama":
+        if resolved_provider == "ollama":
             raw = await _call_ollama(prompt, resolved_model, endpoint)
-        elif provider in ("openai", "grok"):
+        elif resolved_provider in ("openai", "grok"):
             raw = await _call_openai(prompt, resolved_model, endpoint, resolved_key)
-        elif provider == "anthropic":
+        elif resolved_provider == "anthropic":
             raw = await _call_anthropic(prompt, resolved_model, endpoint, resolved_key)
         else:
-            raise ValueError(f"Unsupported provider: {provider}")
+            raise ValueError(f"Unsupported provider: {resolved_provider}")
 
         parsed = _parse_llm_response(raw)
         if parsed:

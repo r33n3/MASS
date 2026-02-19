@@ -4,11 +4,13 @@ Provides cross-scan finding comparison using fingerprints and
 automatic closure of findings that no longer appear in rescans.
 """
 
+import json
 import logging
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from mass.core.filesystem import filter_by_patterns
 from mass.storage.models.deployment import Scan
 from mass.storage.models.finding import Finding, FindingStatus
 
@@ -99,6 +101,20 @@ async def auto_close_findings(
     Returns:
         Number of findings auto-closed.
     """
+    # Load exclude_paths from scan config so we don't close findings
+    # on files that were simply excluded from this scan's scope.
+    current_scan_stmt = select(Scan).where(Scan.id == completed_scan_id)
+    result = await session.execute(current_scan_stmt)
+    current_scan = result.scalar_one_or_none()
+
+    exclude_patterns: list[str] = []
+    if current_scan and current_scan.config:
+        try:
+            scan_config = json.loads(current_scan.config)
+            exclude_patterns = scan_config.get("exclude_paths", []) or []
+        except (ValueError, TypeError):
+            pass
+
     # Find the previous completed scan for this deployment
     prev_scan_stmt = (
         select(Scan)
@@ -144,6 +160,27 @@ async def auto_close_findings(
     )
     result = await session.execute(prev_findings_stmt)
     to_close = result.scalars().all()
+
+    if not to_close:
+        return 0
+
+    # Don't close findings on files that were excluded from this scan
+    if exclude_patterns:
+        excluded_paths = [f.file_path for f in to_close if f.file_path]
+        if excluded_paths:
+            surviving = filter_by_patterns(excluded_paths, exclude_patterns)
+            surviving_set = set(surviving)
+            before_filter = len(to_close)
+            to_close = [
+                f for f in to_close
+                if not f.file_path or f.file_path in surviving_set
+            ]
+            skipped = before_filter - len(to_close)
+            if skipped:
+                logger.info(
+                    "Skipped auto-close for %d findings on excluded paths",
+                    skipped,
+                )
 
     if not to_close:
         return 0

@@ -235,13 +235,20 @@ async def start_scan(
             ),
         )
 
+    # Build scan config, merging custom config with target_files/exclude_paths if provided
+    scan_config = dict(request.config) if request.config else {}
+    if request.target_files:
+        scan_config["target_files"] = request.target_files
+    if request.exclude_paths:
+        scan_config["exclude_paths"] = request.exclude_paths
+
     # Create the scan (only using fields that exist in model)
     scan = Scan(
         tenant_id=tenant.tenant_id,
         deployment_id=request.deployment_id,
         profile=request.profile.value if hasattr(request.profile, 'value') else request.profile,
         status=ScanStatus.PENDING.value,
-        config=json.dumps(request.config) if request.config else None,
+        config=json.dumps(scan_config) if scan_config else None,
         # Initialize findings counters
         total_findings=0,
         critical_findings=0,

@@ -4,7 +4,9 @@ Uses Pydantic Settings for environment-based configuration with
 sensible defaults for development and production.
 """
 
+import os
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, SecretStr, field_validator
@@ -181,6 +183,54 @@ class MassSettings(BaseSettings):
         description="Default model name. Blank = use provider default.",
     )
 
+    # Per-activity LLM overrides (JSON string from env)
+    activity_overrides: str = Field(
+        default="{}",
+        description=(
+            "JSON string of per-activity model overrides. "
+            "Keys: chat, code_analysis, verdict, threat_model, "
+            "explainability, guardrails, finding_verification. "
+            "Values: objects with optional 'provider' and 'model' fields."
+        ),
+    )
+
+    @property
+    def parsed_activity_overrides(self) -> dict[str, dict[str, str]]:
+        """Parse the activity_overrides JSON string into a dict."""
+        import json as _json
+
+        try:
+            data = _json.loads(self.activity_overrides)
+            return data if isinstance(data, dict) else {}
+        except (ValueError, TypeError):
+            return {}
+
+    # CI/CD Integration
+    cicd_webhook_timeout: int = Field(
+        default=30, ge=5, le=120,
+        description="Max seconds to process a CI/CD webhook before timeout",
+    )
+    cicd_gate_default_threshold: str = Field(
+        default="high",
+        description="Default severity threshold for CI/CD gates: critical, high, medium, low",
+    )
+    supply_chain_scan_timeout: int = Field(
+        default=300, ge=30, le=3600,
+        description="Max seconds for a supply chain scan before timeout",
+    )
+    supply_chain_license_policy: str = Field(
+        default="warn",
+        description="License policy: warn (flag non-permissive), strict (fail on copyleft), permissive_only",
+    )
+    privacy_default_frameworks: str = Field(
+        default="gdpr,owasp_llm",
+        description="Comma-separated default privacy frameworks for assessments",
+    )
+    privacy_pii_scan_enabled: bool = Field(
+        default=True,
+        description="Enable PII scanning in privacy assessments",
+    )
+
     # Model provider API keys
     openai_api_key: SecretStr = Field(default=SecretStr(""))
     anthropic_api_key: SecretStr = Field(default=SecretStr(""))
@@ -209,6 +259,34 @@ class MassSettings(BaseSettings):
     def is_development(self) -> bool:
         """Check if running in development."""
         return self.environment == "development"
+
+
+def _load_platform_settings_from_json() -> None:
+    """Load saved platform settings into os.environ before MassSettings init.
+
+    Reads ``data/platform_settings.json`` (persisted via the Settings UI)
+    and injects saved values into ``os.environ`` so that pydantic-settings
+    picks them up.  Called once, right before the first ``MassSettings()``
+    instantiation.
+    """
+    import json as _json
+
+    for candidate in [Path("/app/data/platform_settings.json"), Path("data/platform_settings.json")]:
+        if candidate.is_file():
+            try:
+                data = _json.loads(candidate.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    for key, value in data.items():
+                        if value:
+                            os.environ[key] = value
+            except Exception:
+                pass
+            break
+
+
+# Ensure persisted settings are in os.environ BEFORE the first
+# MassSettings() is constructed (which reads from os.environ).
+_load_platform_settings_from_json()
 
 
 @lru_cache

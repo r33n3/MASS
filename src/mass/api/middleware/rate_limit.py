@@ -113,12 +113,28 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     # Middleware dispatch
     # ------------------------------------------------------------------
 
+    # Read-only endpoints exempt from rate limiting (high request volume
+    # during normal UI operation — file tree browsing, model listing, etc.)
+    _EXEMPT_PREFIXES = (
+        "/health", "/ready", "/metrics",
+        "/api/v1/browse",
+        "/api/v1/scan-targets",
+        "/api/v1/targets",
+        "/api/v1/settings",
+        "/api/v1/ollama",
+        "/api/v1/dashboard",
+    )
+
     async def dispatch(
         self, request: Request, call_next: Callable[[Request], Response]
     ) -> Response:
         """Check rate limits and process request."""
-        # Skip rate limiting for health endpoints
-        if request.url.path in {"/health", "/ready", "/metrics"}:
+        # Skip rate limiting for health + read-only UI endpoints
+        path = request.url.path.rstrip("/")
+        if path in {"/health", "/ready", "/metrics"}:
+            return await call_next(request)
+        # Exempt read-heavy GET endpoints from rate limiting
+        if request.method == "GET" and any(path.startswith(p) for p in self._EXEMPT_PREFIXES):
             return await call_next(request)
 
         client_key = self._get_client_key(request)

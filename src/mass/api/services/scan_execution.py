@@ -121,6 +121,36 @@ class ScanExecutionService:
                 target_files = deploy_meta.get("target_files")
                 inline_content = deploy_meta.get("inline_content")
 
+                # Per-scan target_files override from scan config (e.g. user selected specific files)
+                scan_config = {}
+                if scan.config:
+                    try:
+                        scan_config = json.loads(scan.config)
+                    except (ValueError, TypeError):
+                        pass
+                if scan_config.get("target_files"):
+                    target_files = scan_config["target_files"]
+                    logger.info(
+                        "Scan %s: using %d target files from scan config",
+                        scan_id, len(target_files),
+                    )
+
+                # Apply exclude_paths patterns if provided (glob + exact match)
+                exclude_paths = scan_config.get("exclude_paths")
+                if exclude_paths:
+                    from mass.core.filesystem import filter_by_patterns, walk_with_exclusions
+                    # If no explicit target_files, build full list from source
+                    if not target_files and source_path:
+                        target_files = walk_with_exclusions(source_path)
+                    if target_files:
+                        before = len(target_files)
+                        target_files = filter_by_patterns(target_files, exclude_paths)
+                        logger.info(
+                            "Scan %s: excluded %d files via %d patterns (%d → %d)",
+                            scan_id, before - len(target_files),
+                            len(exclude_paths), before, len(target_files),
+                        )
+
                 # For non-deployment targets, source_path is optional
                 if not source_path and target_type == "deployment":
                     raise ValueError(
@@ -288,7 +318,11 @@ class ScanExecutionService:
                         lambda: judge.judge(brief),
                     )
 
-                    scan.verdict = verdict.to_json()
+                    # Inject model provenance into verdict JSON
+                    verdict_dict = verdict.to_dict()
+                    verdict_dict["model_used"] = deploy_meta.get("model_name") or judge._model or ""
+                    verdict_dict["provider_used"] = deploy_meta.get("model_provider") or judge._provider or ""
+                    scan.verdict = json.dumps(verdict_dict, indent=2)
                     scan.current_phase = "completed"
                     await session.commit()
 
@@ -325,7 +359,10 @@ class ScanExecutionService:
                             verdict_data = json.loads(scan.verdict)
                             tm_builder.ingest_verdict(verdict_data)
                         threat_model_obj = tm_builder.build()
-                        scan.threat_model = json.dumps(threat_model_obj.to_dict())
+                        tm_dict = threat_model_obj.to_dict()
+                        tm_dict["model_used"] = deploy_meta.get("model_name") or judge._model or ""
+                        tm_dict["provider_used"] = deploy_meta.get("model_provider") or judge._provider or ""
+                        scan.threat_model = json.dumps(tm_dict)
                         await session.commit()
                         logger.info(
                             "Scan %s threat model: %s (%d threats, data_class=%s)",
