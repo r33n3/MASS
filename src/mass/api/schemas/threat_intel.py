@@ -84,7 +84,7 @@ class FeedUpdate(BaseModel):
 
 
 class FeedResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     id: str
     name: str
@@ -158,7 +158,7 @@ class ThreatItemUpdate(BaseModel):
 
 
 class ThreatItemResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     id: str
     feed_id: str | None = None
@@ -196,7 +196,7 @@ class ThreatItemListResponse(BaseModel):
 class TechniqueResponse(BaseModel):
     """A MITRE ATLAS technique with MASS coverage status."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     id: str = Field(..., description="ATLAS technique ID (e.g., AML.T0043)")
     name: str
