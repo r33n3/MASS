@@ -94,7 +94,7 @@ class CICDIntegrationUpdate(BaseModel):
 class CICDIntegrationResponse(IDMixin):
     """CI/CD integration response."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     name: str = Field(..., description="Integration name")
     provider: CICDProvider = Field(..., description="CI/CD provider")
@@ -181,7 +181,7 @@ class GateResponse(BaseModel):
 class CICDBuildResponse(BaseModel):
     """A CI/CD-triggered build/scan record."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     id: str = Field(..., description="Build record ID")
     integration_id: str = Field(..., description="Integration that triggered this")
