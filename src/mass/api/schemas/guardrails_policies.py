@@ -2,6 +2,8 @@
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from mass.api.schemas.common import PaginationMeta
+
 
 class FindingSummaryItem(BaseModel):
     """Condensed finding for guardrail matching."""
@@ -127,8 +129,10 @@ class PolicyItem(BaseModel):
 class GenerateGuardrailsResponse(BaseModel):
     """Response with guardrails and policies."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
+    id: str | None = Field(default=None, description="Persisted guardrail set ID")
+    scan_id: str | None = Field(default=None, description="Associated scan ID")
     registry_guardrails: list[GuardrailItem] = Field(default_factory=list)
     ai_guardrails: list[GuardrailItem] = Field(default_factory=list)
     policies: list[PolicyItem] = Field(default_factory=list)
@@ -138,3 +142,13 @@ class GenerateGuardrailsResponse(BaseModel):
     risk_multiplier: float | None = None
     risk_factors: list[str] | None = None
     risk_level: str | None = None
+    created_at: str | None = None
+
+
+class GuardrailSetListResponse(BaseModel):
+    """Paginated list of persisted guardrail sets."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[GenerateGuardrailsResponse] = Field(default_factory=list)
+    pagination: PaginationMeta

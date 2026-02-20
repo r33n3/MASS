@@ -10,16 +10,18 @@ import logging
 import os
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, status
 
-from mass.api.dependencies import CurrentTenantDep
+from mass.api.dependencies import CurrentTenantDep, GuardrailSetRepo, PaginationDep
 from mass.api.schemas.guardrails_policies import (
     GenerateGuardrailsRequest,
     GenerateGuardrailsResponse,
     GuardrailItem,
+    GuardrailSetListResponse,
     PolicyItem,
     RiskContextInput,
 )
+from mass.api.schemas.common import PaginationMeta
 from mass.api.schemas.questionnaire import RiskQuestionnaire, compute_risk_factors
 from mass.core.types import AttackCategory
 from mass.policy.guardrails import get_default_guardrails
@@ -444,6 +446,7 @@ def _parse_json_array(text: str) -> list[dict[str, Any]]:
 async def generate_guardrails_policies(
     request: GenerateGuardrailsRequest,
     tenant: CurrentTenantDep,
+    guardrail_repo: GuardrailSetRepo,
 ) -> GenerateGuardrailsResponse:
     """Generate guardrail and policy recommendations from scan findings."""
 
@@ -584,7 +587,7 @@ async def generate_guardrails_policies(
         if risk_multiplier and risk_multiplier >= 1.8:
             _apply_policy_adjustment(policies, risk_multiplier)
 
-    return GenerateGuardrailsResponse(
+    response = GenerateGuardrailsResponse(
         registry_guardrails=registry_guardrails,
         ai_guardrails=ai_guardrails,
         policies=policies,
@@ -594,4 +597,95 @@ async def generate_guardrails_policies(
         risk_multiplier=risk_multiplier,
         risk_factors=risk_factors,
         risk_level=risk_level,
+    )
+
+    # Auto-persist to database
+    try:
+        from mass.storage.models.ai_artifacts import GuardrailSet
+
+        gs = GuardrailSet(
+            tenant_id=tenant.tenant_id,
+            scan_id=getattr(request, "scan_id", None),
+            target_name=request.target_name or "",
+            provider=request.provider,
+            model_used=model_used,
+            findings_analyzed=len(request.findings),
+            risk_multiplier=risk_multiplier,
+            risk_level=risk_level,
+            risk_factors=json.dumps(risk_factors) if risk_factors else None,
+            registry_guardrails=json.dumps([g.model_dump() for g in registry_guardrails]),
+            ai_guardrails=json.dumps([g.model_dump() for g in ai_guardrails]),
+            policies=json.dumps([p.model_dump() for p in policies]),
+        )
+        created = await guardrail_repo.create(gs)
+        response.id = created.id
+        logger.info("Persisted guardrail set %s", created.id)
+    except Exception as e:
+        logger.warning("Failed to persist guardrail set: %s", e)
+
+    return response
+
+
+# ---- GET endpoints for persisted guardrail sets ----
+
+
+def _guardrail_set_to_response(gs: "GuardrailSet") -> GenerateGuardrailsResponse:
+    """Convert a DB GuardrailSet to the API response schema."""
+    return GenerateGuardrailsResponse(
+        id=gs.id,
+        scan_id=gs.scan_id,
+        registry_guardrails=[
+            GuardrailItem(**g) for g in (json.loads(gs.registry_guardrails) if gs.registry_guardrails else [])
+        ],
+        ai_guardrails=[
+            GuardrailItem(**g) for g in (json.loads(gs.ai_guardrails) if gs.ai_guardrails else [])
+        ],
+        policies=[
+            PolicyItem(**p) for p in (json.loads(gs.policies) if gs.policies else [])
+        ],
+        provider=gs.provider,
+        model_used=gs.model_used,
+        findings_analyzed=gs.findings_analyzed,
+        risk_multiplier=gs.risk_multiplier,
+        risk_factors=json.loads(gs.risk_factors) if gs.risk_factors else None,
+        risk_level=gs.risk_level,
+        created_at=gs.created_at.isoformat() if gs.created_at else None,
+    )
+
+
+@router.get(
+    "/{guardrail_set_id}",
+    response_model=GenerateGuardrailsResponse,
+    summary="Get a persisted guardrail set",
+)
+async def get_guardrail_set(
+    guardrail_set_id: str,
+    tenant: CurrentTenantDep,
+    guardrail_repo: GuardrailSetRepo,
+) -> GenerateGuardrailsResponse:
+    gs = await guardrail_repo.get(guardrail_set_id)
+    if not gs or gs.tenant_id != tenant.tenant_id:
+        raise HTTPException(status_code=404, detail="Guardrail set not found")
+    return _guardrail_set_to_response(gs)
+
+
+@router.get(
+    "/by-scan/{scan_id}",
+    response_model=GuardrailSetListResponse,
+    summary="Get guardrail sets for a scan",
+)
+async def get_guardrail_sets_by_scan(
+    scan_id: str,
+    tenant: CurrentTenantDep,
+    guardrail_repo: GuardrailSetRepo,
+) -> GuardrailSetListResponse:
+    sets = await guardrail_repo.get_by_scan(scan_id, tenant_id=tenant.tenant_id)
+    return GuardrailSetListResponse(
+        items=[_guardrail_set_to_response(gs) for gs in sets],
+        pagination=PaginationMeta(
+            total=len(sets),
+            offset=0,
+            limit=len(sets) or 100,
+            has_more=False,
+        ),
     )

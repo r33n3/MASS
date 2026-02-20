@@ -1,19 +1,29 @@
 {
-  "current_phase": "P0.7",
-  "completed": ["P0.1", "P0.2", "P0.3", "P0.4", "P0.5", "P0.6"],
+  "current_phase": "P3.1",
+  "completed": [
+    "P0.1", "P0.2", "P0.3", "P0.4", "P0.5", "P0.6", "P0.7",
+    "P1.1", "P1.2", "P1.3", "P1.4", "P1.5",
+    "P2.1", "P2.2", "P2.3", "P2.4"
+  ],
   "bugs_filed": [
     {"issue": 7, "title": "Metrics endpoint not accessible through proxy", "status": "fixed"},
     {"issue": 8, "title": "API key creation fails - model/route field mismatch", "status": "fixed"},
-    {"issue": 9, "title": "Explain scan endpoint returns 500 Internal Error", "status": "open"},
+    {"issue": 9, "title": "Explain scan endpoint returns 500 Internal Error", "status": "fixed"},
     {"issue": 10, "title": "Chat endpoint 502 - uses Ollama instead of configured OpenAI", "status": "open"}
   ],
-  "iteration": 1,
-  "p0_results": {
-    "P0.1_infrastructure": "PASS (6/6 after fix)",
-    "P0.2_auth": "PASS (4/4 after fix)",
-    "P0.3_core_scan_api": "PASS (8/8) - EXIT CRITERIA MET",
-    "P0.4_core_scan_ui": "PASS (5/5)",
-    "P0.5_secondary_api": "10/12 PASS - explain_scan(#9) and chat(#10) fail, non-blocking",
-    "P0.6_secondary_ui": "PASS - covered by P0.5 API tests"
+  "iteration": 2,
+  "phase0_exit": "PASSED - Core scan pipeline (P0.3) works end-to-end",
+  "phase1_summary": {
+    "P1.1": "Supply chain: added dependency file parsing (requirements.txt/pyproject.toml/package.json), fixed response schemas. 52 packages registered, SBOM generation, typosquatting detection all verified.",
+    "P1.2": "CI/CD: quality gate evaluation already fully implemented. Fixed response schemas. Gate correctly evaluates severity counts against configurable thresholds.",
+    "P1.3": "Privacy: added regex PII pattern detection (SSN, CC, email, phone, IP, DOB, passport, financial), implemented DB-backed PII exposure analysis, added POST /pii-scan endpoint. PIA runs end-to-end with framework compliance checks.",
+    "P1.4": "Threat intel: 27 MITRE ATLAS techniques cataloged, 63% coverage. Feed/item CRUD, payload generation (template + LLM), coverage analysis all verified.",
+    "P1.5": "Cross-model: comparison framework with probe execution against N models, category comparison, security ranking. Fixed response schemas. 7 providers, 12 attack categories."
+  },
+  "phase2_summary": {
+    "P2.1": "New storage models: GuardrailSet (guardrail_sets table) and Explanation (explanations table) with full FK relationships to tenants, scans, findings.",
+    "P2.2": "Finding verification columns: added verification_status, verification_model, verification_reasoning, verified_at to findings table.",
+    "P2.3": "Migration (a1b2c3d4e5f6), repositories (GuardrailSetRepository, ExplanationRepository), and DI wiring (GuardrailSetRepo, ExplanationRepo type aliases).",
+    "P2.4": "Auto-persist on all generation endpoints: guardrails POST saves GuardrailSet, all 4 explainability POST endpoints save Explanation, verify endpoint persists to verification columns. GET endpoints: guardrails by-id and by-scan, explanations by-finding and by-scan with type filter. Fixed explain_scan include_similar bug and verified_at timezone-naive datetime fix."
   }
 }

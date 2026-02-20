@@ -17,6 +17,7 @@ from mass.storage.repositories.scan import ScanRepository
 from mass.storage.repositories.finding import FindingRepository
 from mass.storage.repositories.remediation import RemediationTemplateRepository
 from mass.storage.repositories.report import ReportRepository
+from mass.storage.repositories.ai_artifacts import ExplanationRepository, GuardrailSetRepository
 
 
 # Settings dependency
@@ -89,6 +90,20 @@ async def get_remediation_repository(db: DBSession) -> RemediationTemplateReposi
 
 RemediationRepo = Annotated[RemediationTemplateRepository, Depends(get_remediation_repository)]
 ReportRepo = Annotated[ReportRepository, Depends(get_report_repository)]
+
+
+async def get_guardrail_set_repository(db: DBSession) -> GuardrailSetRepository:
+    """Get guardrail set repository."""
+    return GuardrailSetRepository(db)
+
+
+async def get_explanation_repository(db: DBSession) -> ExplanationRepository:
+    """Get explanation repository."""
+    return ExplanationRepository(db)
+
+
+GuardrailSetRepo = Annotated[GuardrailSetRepository, Depends(get_guardrail_set_repository)]
+ExplanationRepo = Annotated[ExplanationRepository, Depends(get_explanation_repository)]
 
 
 # Authentication dependencies

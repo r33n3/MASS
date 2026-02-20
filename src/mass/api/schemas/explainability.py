@@ -9,6 +9,8 @@ from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from mass.api.schemas.common import PaginationMeta
+
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -228,6 +230,37 @@ class RemediationPlanResponse(BaseModel):
         default_factory=list,
         description="Low-effort, high-impact items to do first",
     )
+
+
+# ---------------------------------------------------------------------------
+# Module status
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Persisted explanation (for GET endpoints)
+# ---------------------------------------------------------------------------
+
+class ExplanationItem(BaseModel):
+    """A persisted explanation record."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    id: str
+    explanation_type: str
+    scan_id: str | None = None
+    finding_id: str | None = None
+    audience: str = "developer"
+    depth: str = "standard"
+    generated_by: str = "template"
+    content: dict = Field(default_factory=dict)
+    created_at: str | None = None
+
+
+class ExplanationListResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[ExplanationItem] = Field(default_factory=list)
+    pagination: PaginationMeta
 
 
 # ---------------------------------------------------------------------------

@@ -923,7 +923,9 @@ async def verify_finding_endpoint(
         endpoint=endpoint,
     )
 
-    # Persist verification result to finding meta
+    # Persist verification result to finding meta + verification columns
+    from datetime import datetime
+
     meta_data: dict = {}
     if finding.meta:
         try:
@@ -931,7 +933,14 @@ async def verify_finding_endpoint(
         except (json.JSONDecodeError, TypeError):
             pass
     meta_data["last_verification"] = build_verification_meta(result)
-    await finding_repo.update(finding, meta=json.dumps(meta_data))
+    await finding_repo.update(
+        finding,
+        meta=json.dumps(meta_data),
+        verification_status=result.get("verdict", "inconclusive"),
+        verification_model=model or "",
+        verification_reasoning=result.get("explanation", ""),
+        verified_at=datetime.utcnow(),
+    )
 
     return VerificationResult(
         finding_id=finding.id,

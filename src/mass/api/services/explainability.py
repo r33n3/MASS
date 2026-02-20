@@ -398,7 +398,7 @@ async def explain_scan(
     # Explain each top finding
     explained: list[dict] = []
     for f in top_findings:
-        exp = await explain_finding(f, audience, depth, include_similar=False)
+        exp = await explain_finding(f, audience, depth)
         explained.append(exp)
 
     # Chain analysis

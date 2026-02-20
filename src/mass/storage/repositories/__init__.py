@@ -6,6 +6,7 @@ Provides clean data access abstractions over SQLAlchemy models.
 from mass.storage.repositories.base import BaseRepository
 from mass.storage.repositories.tenant import TenantRepository, UserRepository, APIKeyRepository
 from mass.storage.repositories.remediation import RemediationTemplateRepository
+from mass.storage.repositories.ai_artifacts import ExplanationRepository, GuardrailSetRepository
 # from mass.storage.repositories.deployment import DeploymentRepository, ComponentRepository
 # from mass.storage.repositories.scan import ScanRepository, ScanJobRepository
 # from mass.storage.repositories.finding import FindingRepository, EvidenceRepository
@@ -17,6 +18,8 @@ __all__ = [
     "UserRepository",
     "APIKeyRepository",
     "RemediationTemplateRepository",
+    "GuardrailSetRepository",
+    "ExplanationRepository",
     # "DeploymentRepository",
     # "ComponentRepository",
     # "ScanRepository",

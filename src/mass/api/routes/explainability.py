@@ -5,6 +5,7 @@ scan results, and remediation plans.
 Per ARCHITECTURE.md Section 8.1 — Explainability module slot.
 """
 
+import json
 import logging
 
 from fastapi import APIRouter, HTTPException, Query
@@ -12,6 +13,7 @@ from fastapi import APIRouter, HTTPException, Query
 from mass.api.dependencies import (
     CurrentTenantDep,
     DBSession,
+    ExplanationRepo,
     FindingRepo,
     ScanRepo,
 )
@@ -23,14 +25,53 @@ from mass.api.schemas.explainability import (
     ExplainScanRequest,
     ExplainScanResponse,
     ExplainabilityStatusResponse,
+    ExplanationListResponse,
     RemediationPlanRequest,
     RemediationPlanResponse,
 )
+from mass.api.schemas.common import PaginationMeta
 from mass.api.services import explainability as svc
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+# ---------------------------------------------------------------------------
+# Persistence helper
+# ---------------------------------------------------------------------------
+
+async def _persist_explanation(
+    repo: "ExplanationRepo",
+    tenant_id: str,
+    explanation_type: str,
+    content: dict,
+    scan_id: str | None = None,
+    finding_id: str | None = None,
+    audience: str = "developer",
+    depth: str = "standard",
+    generated_by: str = "template",
+) -> str | None:
+    """Persist an explanation to the DB. Returns the explanation ID or None."""
+    try:
+        from mass.storage.models.ai_artifacts import Explanation
+
+        exp = Explanation(
+            tenant_id=tenant_id,
+            scan_id=scan_id,
+            finding_id=finding_id,
+            explanation_type=explanation_type,
+            audience=audience,
+            depth=depth,
+            generated_by=generated_by,
+            content=json.dumps(content),
+        )
+        created = await repo.create(exp)
+        logger.info("Persisted explanation %s (type=%s)", created.id, explanation_type)
+        return created.id
+    except Exception as e:
+        logger.warning("Failed to persist explanation: %s", e)
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -50,6 +91,7 @@ async def explain_finding(
     body: ExplainFindingRequest,
     tenant: CurrentTenantDep,
     finding_repo: FindingRepo,
+    explanation_repo: ExplanationRepo,
 ) -> ExplainFindingResponse:
     # Load finding from DB
     finding_model = await finding_repo.get(body.finding_id)
@@ -80,6 +122,19 @@ async def explain_finding(
         include_remediation=body.include_remediation,
         include_compliance=body.include_compliance,
     )
+
+    await _persist_explanation(
+        explanation_repo,
+        tenant_id=tenant.tenant_id,
+        explanation_type="finding",
+        content=result,
+        scan_id=finding_model.scan_id,
+        finding_id=finding_model.id,
+        audience=body.audience.value,
+        depth=body.depth.value,
+        generated_by=result.get("generated_by", "template"),
+    )
+
     return ExplainFindingResponse(**result)
 
 
@@ -98,6 +153,7 @@ async def explain_chains(
     tenant: CurrentTenantDep,
     scan_repo: ScanRepo,
     finding_repo: FindingRepo,
+    explanation_repo: ExplanationRepo,
 ) -> ExplainChainResponse:
     scan = await scan_repo.get(body.scan_id)
     if not scan or scan.tenant_id != tenant.tenant_id:
@@ -121,6 +177,16 @@ async def explain_chains(
         audience=body.audience.value,
         max_chains=body.max_chains,
     )
+
+    await _persist_explanation(
+        explanation_repo,
+        tenant_id=tenant.tenant_id,
+        explanation_type="chains",
+        content=result,
+        scan_id=body.scan_id,
+        audience=body.audience.value,
+    )
+
     return ExplainChainResponse(**result)
 
 
@@ -139,6 +205,7 @@ async def explain_scan(
     tenant: CurrentTenantDep,
     scan_repo: ScanRepo,
     finding_repo: FindingRepo,
+    explanation_repo: ExplanationRepo,
 ) -> ExplainScanResponse:
     scan = await scan_repo.get(body.scan_id)
     if not scan or scan.tenant_id != tenant.tenant_id:
@@ -168,6 +235,17 @@ async def explain_scan(
         depth=body.depth.value,
         max_findings=body.max_findings,
     )
+
+    await _persist_explanation(
+        explanation_repo,
+        tenant_id=tenant.tenant_id,
+        explanation_type="scan",
+        content=result,
+        scan_id=body.scan_id,
+        audience=body.audience.value,
+        depth=body.depth.value,
+    )
+
     return ExplainScanResponse(**result)
 
 
@@ -186,6 +264,7 @@ async def remediation_plan(
     tenant: CurrentTenantDep,
     scan_repo: ScanRepo,
     finding_repo: FindingRepo,
+    explanation_repo: ExplanationRepo,
 ) -> RemediationPlanResponse:
     scan = await scan_repo.get(body.scan_id)
     if not scan or scan.tenant_id != tenant.tenant_id:
@@ -210,7 +289,89 @@ async def remediation_plan(
         max_items=body.max_items,
         group_by=body.group_by,
     )
+
+    await _persist_explanation(
+        explanation_repo,
+        tenant_id=tenant.tenant_id,
+        explanation_type="remediation_plan",
+        content=result,
+        scan_id=body.scan_id,
+    )
+
     return RemediationPlanResponse(**result)
+
+
+# ---------------------------------------------------------------------------
+# GET endpoints for persisted explanations
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/by-finding/{finding_id}",
+    response_model=ExplanationListResponse,
+    summary="Get explanations for a finding",
+)
+async def get_explanations_by_finding(
+    finding_id: str,
+    tenant: CurrentTenantDep,
+    explanation_repo: ExplanationRepo,
+) -> ExplanationListResponse:
+    items = await explanation_repo.get_by_finding(finding_id, tenant_id=tenant.tenant_id)
+    return ExplanationListResponse(
+        items=[
+            {
+                "id": e.id,
+                "explanation_type": e.explanation_type,
+                "scan_id": e.scan_id,
+                "finding_id": e.finding_id,
+                "audience": e.audience,
+                "depth": e.depth,
+                "generated_by": e.generated_by,
+                "content": json.loads(e.content) if e.content else {},
+                "created_at": e.created_at.isoformat() if e.created_at else None,
+            }
+            for e in items
+        ],
+        pagination=PaginationMeta(
+            total=len(items), offset=0, limit=len(items) or 100, has_more=False,
+        ),
+    )
+
+
+@router.get(
+    "/by-scan/{scan_id}",
+    response_model=ExplanationListResponse,
+    summary="Get explanations for a scan",
+)
+async def get_explanations_by_scan(
+    scan_id: str,
+    tenant: CurrentTenantDep,
+    explanation_repo: ExplanationRepo,
+    explanation_type: str | None = Query(default=None, description="Filter: finding, scan, chains, remediation_plan"),
+) -> ExplanationListResponse:
+    items = await explanation_repo.get_by_scan(
+        scan_id,
+        explanation_type=explanation_type,
+        tenant_id=tenant.tenant_id,
+    )
+    return ExplanationListResponse(
+        items=[
+            {
+                "id": e.id,
+                "explanation_type": e.explanation_type,
+                "scan_id": e.scan_id,
+                "finding_id": e.finding_id,
+                "audience": e.audience,
+                "depth": e.depth,
+                "generated_by": e.generated_by,
+                "content": json.loads(e.content) if e.content else {},
+                "created_at": e.created_at.isoformat() if e.created_at else None,
+            }
+            for e in items
+        ],
+        pagination=PaginationMeta(
+            total=len(items), offset=0, limit=len(items) or 100, has_more=False,
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
