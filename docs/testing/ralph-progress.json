@@ -1,11 +1,12 @@
 {
-  "current_phase": "P5.1",
+  "current_phase": "COMPLETE",
   "completed": [
     "P0.1", "P0.2", "P0.3", "P0.4", "P0.5", "P0.6", "P0.7",
     "P1.1", "P1.2", "P1.3", "P1.4", "P1.5",
     "P2.1", "P2.2", "P2.3", "P2.4",
     "P3.1", "P3.2",
-    "P4.1", "P4.2", "P4.3", "P4.4", "P4.5", "P4.6", "P4.7"
+    "P4.1", "P4.2", "P4.3", "P4.4", "P4.5", "P4.6", "P4.7",
+    "P5.1", "P5.2", "P5.3"
   ],
   "bugs_filed": [
     {"issue": 7, "title": "Metrics endpoint not accessible through proxy", "status": "fixed"},
@@ -13,7 +14,7 @@
     {"issue": 9, "title": "Explain scan endpoint returns 500 Internal Error", "status": "fixed"},
     {"issue": 10, "title": "Chat endpoint 502 - uses Ollama instead of configured OpenAI", "status": "open"}
   ],
-  "iteration": 4,
+  "iteration": 5,
   "phase0_exit": "PASSED - Core scan pipeline (P0.3) works end-to-end",
   "phase1_summary": {
     "P1.1": "Supply chain: added dependency file parsing (requirements.txt/pyproject.toml/package.json), fixed response schemas. 52 packages registered, SBOM generation, typosquatting detection all verified.",
@@ -40,5 +41,10 @@
     "P4.5": "Scheduled/recurring scans: cron_scheduler.py with 5-field cron expression parser. Queries deployments with scan_schedule, dispatches to Redis queue on match. Added scan_schedule and scan_schedule_profile columns to Deployment model.",
     "P4.6": "Remediation verification: POST /{scan_id}/verify-finding/{finding_id} endpoint in scans.py. Calls existing verify_finding() service, updates verification columns on finding.",
     "P4.7": "Confidence calibration: orchestration/calibration.py with CalibrationEngine, CalibrationStats, CalibrationProfile. Computes precision per analyzer x category from triage history, adjusts confidence scores. Added list_triaged() to FindingRepository."
+  },
+  "phase5_summary": {
+    "P5.1": "PDF report generation: reporting/formats/pdf.py with PdfFormatter class. Renders HTML report to PDF via weasyprint or xhtml2pdf (tries in order). Injects print-friendly CSS overrides for A4 layout with severity badge colors and page-break-inside:avoid. Replaced _generate_pdf_placeholder in ReportGenerator with real PDF generation.",
+    "P5.2": "MCP server git integration: Already complete. All 18 files in src/mass/mcp_server/ tracked in git. Entry point mass-mcp registered in pyproject.toml. No action needed.",
+    "P5.3": "Compliance assessor wiring: Replaced stub POST /compliance/assess with real ComplianceAssessor. Loads DB findings, converts to core findings, runs assessment against selected frameworks (OWASP LLM, MITRE ATLAS, NIST AI RMF, EU AI Act). Returns real compliance scores with per-control pass/fail/partial status and finding counts. Also wired auto-compliance into report generation -- reports now include compliance section by default."
   }
 }

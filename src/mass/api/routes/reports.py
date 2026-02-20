@@ -352,6 +352,29 @@ async def generate_report(
             scan, deployment_repo, core_findings, verdict_data, threat_model_data,
         )
 
+    # Auto-compute compliance assessment if frameworks requested or defaulting
+    compliance_result = None
+    try:
+        from mass.compliance.assessor import ComplianceAssessor
+        from mass.core.types import FrameworkType as FT
+
+        fw_id_map = {
+            "owasp:llm": FT.OWASP_LLM,
+            "mitre:atlas": FT.MITRE_ATLAS,
+            "nist:ai_rmf": FT.NIST_AI_RMF,
+            "eu:ai_act": FT.EU_AI_ACT,
+        }
+        if request.frameworks:
+            fw_types = [fw_id_map[f] for f in request.frameworks if f in fw_id_map]
+        else:
+            fw_types = [FT.OWASP_LLM, FT.MITRE_ATLAS]
+
+        if core_findings and fw_types:
+            assessor = ComplianceAssessor(frameworks=fw_types)
+            compliance_result = assessor.assess(core_findings, scan_id=request.scan_id)
+    except Exception:
+        pass  # Compliance is non-fatal for report generation
+
     # Generate the report content (pure computation, no DB)
     try:
         config = ReportConfig(
@@ -364,6 +387,7 @@ async def generate_report(
             format=report_format,
             findings=core_findings,
             scan_id=request.scan_id,
+            compliance_result=compliance_result,
             metadata={"scan_id": scan.id, "profile": scan.profile},
             verdict=verdict_data,
             threat_model=threat_model_data,
