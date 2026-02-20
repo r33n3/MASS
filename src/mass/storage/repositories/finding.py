@@ -242,6 +242,35 @@ class FindingRepository(BaseRepository[Finding]):
         result = await self.session.execute(stmt)
         return result.scalars().all()
 
+    async def list_all_for_scan(
+        self,
+        scan_id: str,
+        *,
+        severity: str | None = None,
+        category: str | None = None,
+    ) -> Sequence[Finding]:
+        """Fetch all findings for a scan without pagination.
+
+        Used for in-memory grouping/deduplication.
+
+        Args:
+            scan_id: Scan ID.
+            severity: Optional severity filter.
+            category: Optional category filter.
+
+        Returns:
+            All matching findings.
+        """
+        stmt = select(Finding).where(Finding.scan_id == scan_id)
+        if severity:
+            stmt = stmt.where(Finding.severity == severity)
+        if category:
+            stmt = stmt.where(Finding.category == category)
+        stmt = stmt.order_by(Finding.severity, Finding.created_at.desc())
+
+        result = await self.session.execute(stmt)
+        return result.scalars().all()
+
     async def list_by_fingerprint(
         self,
         fingerprint: str,

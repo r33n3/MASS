@@ -430,6 +430,35 @@ class JobExecutor:
         return _map.get(severity, severity)
 
     @staticmethod
+    def _cap_severity_by_confidence(
+        severity: "Severity",
+        confidence: float,
+        threshold: float = 0.5,
+    ) -> "Severity":
+        """Cap severity based on confidence score.
+
+        Findings with confidence below the threshold cannot exceed
+        MEDIUM severity, preventing alert fatigue from unvalidated
+        static pattern matches.
+        """
+        from mass.core.types import Severity
+
+        if confidence >= threshold:
+            return severity
+
+        _SEV_RANK = {
+            Severity.CRITICAL: 0,
+            Severity.HIGH: 1,
+            Severity.MEDIUM: 2,
+            Severity.LOW: 3,
+            Severity.INFO: 4,
+        }
+        cap = Severity.MEDIUM
+        if _SEV_RANK.get(severity, 4) < _SEV_RANK[cap]:
+            return cap
+        return severity
+
+    @staticmethod
     def _convert_context_finding(ctx_finding: Any) -> Finding:
         """Convert ContextFinding to core Finding.
 
@@ -440,7 +469,10 @@ class JobExecutor:
         from mass.core.findings import Evidence, Remediation
         from mass.core.types import AttackCategory, ComponentType, ConfidenceLevel
 
+        confidence = 0.4  # Static pattern match confidence
         downgraded = JobExecutor._downgrade_severity(ctx_finding.severity)
+        pre_cap = downgraded
+        downgraded = JobExecutor._cap_severity_by_confidence(downgraded, confidence)
 
         # Map context risk categories to OWASP LLM attack categories
         _CTX_CATEGORY = {
@@ -494,7 +526,7 @@ class JobExecutor:
                 f"confirmed via model interaction."
             ),
             severity=downgraded,
-            confidence=0.4,
+            confidence=confidence,
             category=attack_cat,
             component_type=ComponentType.CONTEXT,
             component_name=ctx_finding.pattern_name or "context",
@@ -513,6 +545,7 @@ class JobExecutor:
             metadata={
                 "confidence_level": ConfidenceLevel.STATIC_MATCH.value,
                 "original_severity": ctx_finding.severity.value if hasattr(ctx_finding.severity, "value") else str(ctx_finding.severity),
+                **({"pre_cap_severity": pre_cap.value} if pre_cap != downgraded else {}),
             },
         )
 
