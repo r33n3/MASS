@@ -11,6 +11,7 @@ If neither is installed, raises ImportError with install instructions.
 
 import io
 import logging
+import re
 from typing import Any
 
 from mass.core.findings import Finding
@@ -18,6 +19,48 @@ from mass.compliance.assessor import AssessmentResult
 from mass.reporting.formats.html import HtmlFormatter
 
 logger = logging.getLogger(__name__)
+
+# CSS variable definitions from the HTML template's :root block.
+# xhtml2pdf does not support CSS custom properties (var()), so we
+# resolve them to literal values before rendering.
+_CSS_VARIABLES: dict[str, str] = {
+    "--bg-void": "#0a0b09",
+    "--bg-deep": "#0d100d",
+    "--bg-primary": "#141816",
+    "--bg-secondary": "#1a1f1c",
+    "--bg-tertiary": "#242a26",
+    "--bg-elevated": "#1e2420",
+    "--text-primary": "#e8e4dc",
+    "--text-secondary": "#a8a498",
+    "--text-muted": "#6b6a60",
+    "--text-aged": "#d4cfc2",
+    "--toxic": "#7FFF00",
+    "--toxic-mid": "#9ACD32",
+    "--toxic-dark": "#6B8E23",
+    "--toxic-dim": "rgba(127, 255, 0, 0.15)",
+    "--toxic-glow": "rgba(127, 255, 0, 0.4)",
+    "--rust": "#c45c3a",
+    "--rust-bright": "#e07850",
+    "--rust-dim": "rgba(196, 92, 58, 0.15)",
+    "--olive": "#6b7a4f",
+    "--olive-bright": "#8a9d68",
+    "--olive-dim": "rgba(107, 122, 79, 0.15)",
+    "--amber": "#d4a03a",
+    "--amber-dim": "rgba(212, 160, 58, 0.15)",
+    "--success": "#5d8a4a",
+    "--warning": "#c9943a",
+    "--error": "#b84a3c",
+    "--critical": "#8b2020",
+    "--border": "#3a3c38",
+    "--border-worn": "#4a4c48",
+    "--border-accent": "#5a5c58",
+    "--font-display": "'Special Elite', 'Courier New', monospace",
+    "--font-mono": "'IBM Plex Mono', 'Consolas', monospace",
+    "--font-body": "'Instrument Sans', system-ui, sans-serif",
+}
+
+# Regex matching var(--name) with optional fallback: var(--name, fallback)
+_VAR_PATTERN = re.compile(r"var\(\s*(--[\w-]+)\s*(?:,\s*([^)]+))?\s*\)")
 
 
 class PdfFormatter:
@@ -77,8 +120,57 @@ class PdfFormatter:
 
         return self._render_pdf(html_content)
 
+    @staticmethod
+    def _resolve_css_variables(html: str) -> str:
+        """Replace all CSS var(--name) references with literal values.
+
+        xhtml2pdf does not support CSS custom properties, so we resolve
+        them before rendering.  Performs multiple passes to handle any
+        nested variable references (e.g. a variable whose value
+        itself contains var()).
+        """
+        def _replace(m: re.Match[str]) -> str:
+            name = m.group(1)
+            fallback = m.group(2)
+            value = _CSS_VARIABLES.get(name)
+            if value is not None:
+                return value
+            if fallback is not None:
+                return fallback.strip()
+            # Unknown variable with no fallback -- return inherit
+            return "inherit"
+
+        # Multiple passes to resolve any nested references
+        for _ in range(3):
+            resolved = _VAR_PATTERN.sub(_replace, html)
+            if resolved == html:
+                break
+            html = resolved
+
+        # Strip the :root block entirely -- xhtml2pdf can't parse
+        # custom property definitions (--name: value).
+        html = re.sub(
+            r":root\s*\{[^}]*\}",
+            "/* :root variables resolved inline */",
+            html,
+        )
+
+        # Simplify linear-gradient() to the first color stop (xhtml2pdf
+        # doesn't support gradients).  Matches patterns like:
+        #   linear-gradient(135deg, #1a1f1c 0%, #141816 100%)  →  #1a1f1c
+        html = re.sub(
+            r"linear-gradient\([^,]+,\s*([#\w]+(?:\([^)]*\))?)\s+\d+%[^)]*\)",
+            r"\1",
+            html,
+        )
+
+        return html
+
     def _inject_pdf_styles(self, html: str) -> str:
-        """Inject PDF-specific CSS overrides for better print rendering."""
+        """Inject PDF-specific CSS overrides and resolve CSS variables."""
+        # First resolve all var() references to literal values
+        html = self._resolve_css_variables(html)
+
         pdf_styles = """
         <style>
         /* PDF-specific overrides */
