@@ -157,6 +157,23 @@ class ProgressBridge:
         except Exception:
             logger.debug("Failed to broadcast progress", exc_info=True)
 
+        # Publish SCAN_PROGRESS event
+        try:
+            from mass.core.events import get_event_bus, Event, EventType
+            await get_event_bus().publish(Event(
+                type=EventType.SCAN_PROGRESS,
+                data={
+                    "scan_id": self._scan_id,
+                    "progress_percent": progress.progress_percent,
+                    "current_phase": progress.current_phase,
+                    "jobs_completed": progress.jobs_completed,
+                    "jobs_total": progress.jobs_total,
+                },
+                tenant_id=self._tenant_id,
+            ))
+        except Exception:
+            logger.debug("Failed to publish SCAN_PROGRESS event", exc_info=True)
+
     async def _store_findings_async(self, findings: list[CoreFinding]) -> None:
         """Async: store findings and atomically update counts on Scan."""
         from sqlalchemy import update, text
@@ -265,6 +282,21 @@ class ProgressBridge:
                 )
         except Exception:
             logger.debug("Failed to broadcast findings", exc_info=True)
+
+        # Record finding metrics
+        try:
+            from mass.core.metrics import METRICS
+            METRICS.inc("mass_findings_total", len(findings), help_text="Total findings created")
+            for sev, count in severity_counts.items():
+                if count > 0:
+                    METRICS.inc(
+                        "mass_findings_by_severity",
+                        count,
+                        labels={"severity": sev},
+                        help_text="Findings by severity",
+                    )
+        except Exception:
+            logger.debug("Failed to record finding metrics", exc_info=True)
 
         # Publish FINDING_CREATED events
         try:

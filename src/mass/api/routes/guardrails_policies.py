@@ -623,6 +623,21 @@ async def generate_guardrails_policies(
     except Exception as e:
         logger.warning("Failed to persist guardrail set: %s", e)
 
+    # Publish GUARDRAIL_GENERATED event
+    try:
+        from mass.core.events import publish_event, Event, EventType
+        await publish_event(Event(
+            type=EventType.GUARDRAIL_GENERATED,
+            data={
+                "scan_id": request.scan_id,
+                "risk_level": response.risk_level,
+                "guardrails_count": len(response.registry_guardrails) + len(response.ai_guardrails),
+            },
+            tenant_id=tenant.tenant_id,
+        ))
+    except Exception:
+        pass
+
     return response
 
 

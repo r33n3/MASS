@@ -388,6 +388,22 @@ async def generate_report(
         await report_repo.session.flush()
         await report_repo.session.refresh(created)
 
+        # Publish REPORT_GENERATED event
+        try:
+            from mass.core.events import publish_event, Event, EventType
+            await publish_event(Event(
+                type=EventType.REPORT_GENERATED,
+                data={
+                    "report_id": report_id,
+                    "scan_id": request.scan_id,
+                    "format": request.format,
+                    "report_type": request.report_type,
+                },
+                tenant_id=tenant.tenant_id,
+            ))
+        except Exception:
+            pass
+
     except Exception as e:
         import logging
         logging.getLogger(__name__).exception("Report generation failed")

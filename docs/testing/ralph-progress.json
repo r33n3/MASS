@@ -1,9 +1,10 @@
 {
-  "current_phase": "P3.1",
+  "current_phase": "P4.1",
   "completed": [
     "P0.1", "P0.2", "P0.3", "P0.4", "P0.5", "P0.6", "P0.7",
     "P1.1", "P1.2", "P1.3", "P1.4", "P1.5",
-    "P2.1", "P2.2", "P2.3", "P2.4"
+    "P2.1", "P2.2", "P2.3", "P2.4",
+    "P3.1", "P3.2"
   ],
   "bugs_filed": [
     {"issue": 7, "title": "Metrics endpoint not accessible through proxy", "status": "fixed"},
@@ -11,7 +12,7 @@
     {"issue": 9, "title": "Explain scan endpoint returns 500 Internal Error", "status": "fixed"},
     {"issue": 10, "title": "Chat endpoint 502 - uses Ollama instead of configured OpenAI", "status": "open"}
   ],
-  "iteration": 2,
+  "iteration": 3,
   "phase0_exit": "PASSED - Core scan pipeline (P0.3) works end-to-end",
   "phase1_summary": {
     "P1.1": "Supply chain: added dependency file parsing (requirements.txt/pyproject.toml/package.json), fixed response schemas. 52 packages registered, SBOM generation, typosquatting detection all verified.",
@@ -25,5 +26,9 @@
     "P2.2": "Finding verification columns: added verification_status, verification_model, verification_reasoning, verified_at to findings table.",
     "P2.3": "Migration (a1b2c3d4e5f6), repositories (GuardrailSetRepository, ExplanationRepository), and DI wiring (GuardrailSetRepo, ExplanationRepo type aliases).",
     "P2.4": "Auto-persist on all generation endpoints: guardrails POST saves GuardrailSet, all 4 explainability POST endpoints save Explanation, verify endpoint persists to verification columns. GET endpoints: guardrails by-id and by-scan, explanations by-finding and by-scan with type filter. Fixed explain_scan include_similar bug and verified_at timezone-naive datetime fix."
+  },
+  "phase3_summary": {
+    "P3.1": "Event wiring: Added SCAN_PROGRESS to progress bridge, EXPLANATION_GENERATED to all 4 explainability POST endpoints, REMEDIATION_PLAN_GENERATED to remediation endpoint, GUARDRAIL_GENERATED (new event type) to guardrails endpoint, REPORT_GENERATED to report generation, PROBE_STARTED/COMPLETED/FAILED to interrogation, AUTH_SUCCESS/AUTH_FAILURE to auth middleware. Total active event types: 24+ (up from 14).",
+    "P3.2": "Metrics instrumentation: mass_scans_total (counter with profile label), mass_scans_active (gauge), mass_findings_total (counter), mass_findings_by_severity (counter with severity label), mass_probe_executions_total (counter), mass_worker_jobs_processed/failed (counters). Existing mass_api_requests_total and mass_api_latency_seconds in logging middleware verified working. /metrics endpoint returns Prometheus text format."
   }
 }

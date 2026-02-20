@@ -84,6 +84,9 @@ class EventType(str, Enum):
     PRIVACY_PII_DETECTED = "privacy.pii_detected"
     PRIVACY_COMPLIANCE_CHECK = "privacy.compliance_check"
 
+    # Guardrail events
+    GUARDRAIL_GENERATED = "guardrail.generated"
+
     # Explainability events
     EXPLANATION_GENERATED = "explain.generated"
     REMEDIATION_PLAN_GENERATED = "explain.remediation_plan"

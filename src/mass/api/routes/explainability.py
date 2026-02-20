@@ -135,6 +135,17 @@ async def explain_finding(
         generated_by=result.get("generated_by", "template"),
     )
 
+    # Publish event
+    try:
+        from mass.core.events import publish_event, Event, EventType
+        await publish_event(Event(
+            type=EventType.EXPLANATION_GENERATED,
+            data={"explanation_type": "finding", "finding_id": body.finding_id, "audience": body.audience.value},
+            tenant_id=tenant.tenant_id,
+        ))
+    except Exception:
+        pass
+
     return ExplainFindingResponse(**result)
 
 
@@ -186,6 +197,17 @@ async def explain_chains(
         scan_id=body.scan_id,
         audience=body.audience.value,
     )
+
+    # Publish event
+    try:
+        from mass.core.events import publish_event, Event, EventType
+        await publish_event(Event(
+            type=EventType.EXPLANATION_GENERATED,
+            data={"explanation_type": "chains", "scan_id": body.scan_id},
+            tenant_id=tenant.tenant_id,
+        ))
+    except Exception:
+        pass
 
     return ExplainChainResponse(**result)
 
@@ -246,6 +268,17 @@ async def explain_scan(
         depth=body.depth.value,
     )
 
+    # Publish event
+    try:
+        from mass.core.events import publish_event, Event, EventType
+        await publish_event(Event(
+            type=EventType.EXPLANATION_GENERATED,
+            data={"explanation_type": "scan", "scan_id": body.scan_id},
+            tenant_id=tenant.tenant_id,
+        ))
+    except Exception:
+        pass
+
     return ExplainScanResponse(**result)
 
 
@@ -297,6 +330,17 @@ async def remediation_plan(
         content=result,
         scan_id=body.scan_id,
     )
+
+    # Publish event
+    try:
+        from mass.core.events import publish_event, Event, EventType
+        await publish_event(Event(
+            type=EventType.REMEDIATION_PLAN_GENERATED,
+            data={"scan_id": body.scan_id, "items_count": len(result.get("items", []))},
+            tenant_id=tenant.tenant_id,
+        ))
+    except Exception:
+        pass
 
     return RemediationPlanResponse(**result)
 

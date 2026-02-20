@@ -82,6 +82,14 @@ class ScanExecutionService:
                 except Exception:
                     logger.debug("Failed to publish SCAN_STARTED event", exc_info=True)
 
+                # Record scan metrics
+                try:
+                    from mass.core.metrics import METRICS
+                    METRICS.inc("mass_scans_total", labels={"profile": profile_name}, help_text="Total scans started")
+                    METRICS.inc("mass_scans_active", help_text="Currently active scans")
+                except Exception:
+                    pass
+
                 # Load deployment to get source_path and target configuration
                 deployment = await deployment_repo.get(scan.deployment_id)
                 if not deployment:
@@ -466,6 +474,13 @@ class ScanExecutionService:
                 except Exception:
                     logger.debug("Failed to publish SCAN_COMPLETED event", exc_info=True)
 
+                # Decrement active scans
+                try:
+                    from mass.core.metrics import METRICS
+                    METRICS.inc("mass_scans_active", -1)
+                except Exception:
+                    pass
+
                 # Drain queue: start next queued scan if capacity available
                 await self._drain_queued_scans()
 
@@ -506,6 +521,13 @@ class ScanExecutionService:
                         ))
                     except Exception:
                         logger.debug("Failed to publish SCAN_FAILED event", exc_info=True)
+
+                    # Decrement active scans
+                    try:
+                        from mass.core.metrics import METRICS
+                        METRICS.inc("mass_scans_active", -1)
+                    except Exception:
+                        pass
 
                     # Drain queue: start next queued scan if capacity available
                     await self._drain_queued_scans()
