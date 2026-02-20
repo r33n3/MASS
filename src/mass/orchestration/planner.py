@@ -27,6 +27,7 @@ class JobType(str, Enum):
     WORKFLOW_ANALYSIS = "workflow_analysis"
     MODEL_INTERROGATION = "model_interrogation"
     ARCHITECTURE_ANALYSIS = "architecture_analysis"
+    RAG_ANALYSIS = "rag_analysis"
 
 
 @dataclass
@@ -152,6 +153,7 @@ class DeploymentInfo:
     has_infrastructure: bool = False
     has_secrets_risk: bool = True  # Always check for secrets
     has_model_endpoint: bool = False  # Remote model API configured
+    has_rag_pipeline: bool = False  # RAG/vector DB code detected
 
     # Detected environment (populated after discovery phase)
     cloud_provider: str | None = None
@@ -326,6 +328,20 @@ class ScanPlanner:
                 )
                 plan.add_job(job)
                 static_analysis_ids.append(job.id)
+
+        # RAG pipeline analysis
+        if self.profile.rag_analyzer.enabled and deployment.has_rag_pipeline:
+            job = PlannedJob(
+                job_type=JobType.RAG_ANALYSIS,
+                name="RAG Pipeline Analysis",
+                description="Analyze RAG pipeline code for security issues",
+                priority=self.profile.rag_analyzer.priority,
+                timeout_seconds=self.profile.rag_analyzer.timeout_seconds,
+                depends_on=depends,
+                config=self.profile.rag_analyzer.options,
+            )
+            plan.add_job(job)
+            static_analysis_ids.append(job.id)
 
         # Workflow analysis
         if self.profile.workflow_analyzer.enabled and deployment.has_workflows:

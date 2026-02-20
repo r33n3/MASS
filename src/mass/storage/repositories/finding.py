@@ -216,6 +216,32 @@ class FindingRepository(BaseRepository[Finding]):
         result = await self.session.execute(stmt)
         return result.scalars().all()
 
+    async def list_triaged(
+        self,
+        *,
+        tenant_id: str | None = None,
+        limit: int = 5000,
+    ) -> Sequence[Finding]:
+        """List findings that have been triaged (status != open).
+
+        Used by the confidence calibration engine to compute precision
+        per analyzer × category.
+
+        Args:
+            tenant_id: Optional tenant filter.
+            limit: Maximum results.
+
+        Returns:
+            Findings with a triage decision.
+        """
+        stmt = select(Finding).where(Finding.status != "open")
+        if tenant_id:
+            stmt = stmt.where(Finding.tenant_id == tenant_id)
+        stmt = stmt.order_by(Finding.updated_at.desc()).limit(limit)
+
+        result = await self.session.execute(stmt)
+        return result.scalars().all()
+
     async def list_by_fingerprint(
         self,
         fingerprint: str,

@@ -612,3 +612,56 @@ async def get_scan_findings_summary(
         suppressed=0,
         acknowledged=0,
     )
+
+
+@router.post(
+    "/{scan_id}/verify-finding/{finding_id}",
+    summary="Re-verify a finding",
+    description=(
+        "Run targeted re-verification of a specific finding against "
+        "the current source code. Much faster than a full rescan."
+    ),
+)
+async def verify_scan_finding(
+    scan_id: str,
+    finding_id: str,
+    tenant: CurrentTenantDep,
+    scan_repo: ScanRepo,
+    finding_repo: FindingRepo,
+    db: DBSession,
+) -> dict:
+    """Re-verify a specific finding against current source."""
+    scan = await scan_repo.get(scan_id)
+    if not scan or scan.tenant_id != tenant.tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Scan not found",
+        )
+
+    finding = await finding_repo.get(finding_id)
+    if not finding or finding.scan_id != scan_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Finding not found in this scan",
+        )
+
+    from mass.api.services.finding_verification import verify_finding
+
+    result = await verify_finding(finding)
+
+    # Update finding verification columns
+    verdict = result.get("verdict", "inconclusive")
+    update_fields = {
+        "verification_status": verdict,
+        "verification_model": result.get("model", ""),
+        "verification_reasoning": result.get("explanation", ""),
+        "verified_at": datetime.utcnow(),
+    }
+    await finding_repo.update(finding, **update_fields)
+    await db.commit()
+
+    return {
+        "finding_id": finding_id,
+        "scan_id": scan_id,
+        "verification": result,
+    }

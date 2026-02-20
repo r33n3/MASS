@@ -170,6 +170,7 @@ class JobExecutor:
         self._handlers[JobType.MCP_ANALYSIS] = self._handle_mcp_analysis
         self._handlers[JobType.ATTACK_SURFACE] = self._handle_attack_surface
         self._handlers[JobType.WORKFLOW_ANALYSIS] = self._handle_workflow_analysis
+        self._handlers[JobType.RAG_ANALYSIS] = self._handle_rag_analysis
         self._handlers[JobType.MODEL_INTERROGATION] = self._handle_model_interrogation
 
     def register_handler(self, job_type: JobType, handler: JobHandler) -> None:
@@ -2036,6 +2037,106 @@ class JobExecutor:
 
         return result
 
+    @staticmethod
+    def _convert_rag_finding(rag_finding: Any) -> Finding:
+        """Convert RAGFinding to core Finding."""
+        from mass.core.findings import Evidence, Remediation
+        from mass.core.types import AttackCategory, ComponentType
+
+        _RAG_CATEGORY = {
+            "unvalidated_ingestion": AttackCategory.DATA_MODEL_POISONING,
+            "unauthenticated_vectordb": AttackCategory.SENSITIVE_INFO,
+            "no_access_control": AttackCategory.DATA_LEAKAGE,
+            "unsigned_embedding_model": AttackCategory.SUPPLY_CHAIN,
+            "no_relevance_filtering": AttackCategory.MISINFORMATION,
+            "unsanitized_retrieval": AttackCategory.PROMPT_INJECTION,
+            "hardcoded_connection": AttackCategory.SECRETS_EXPOSURE,
+            "insecure_chunking": AttackCategory.UNBOUNDED_CONSUMPTION,
+        }
+        cat_key = rag_finding.category.value if hasattr(rag_finding.category, "value") else str(rag_finding.category)
+        attack_cat = _RAG_CATEGORY.get(cat_key, AttackCategory.DATA_MODEL_POISONING)
+
+        evidence_items: list[Evidence] = []
+        if rag_finding.code_snippet:
+            evidence_items.append(Evidence(
+                type="code",
+                content=rag_finding.code_snippet,
+                source_file=rag_finding.file_path,
+                source_line=rag_finding.line_number,
+                metadata={"matched_pattern": rag_finding.matched_pattern},
+            ))
+
+        return Finding(
+            title=f"RAG Pipeline: {rag_finding.title}",
+            description=rag_finding.description,
+            severity=rag_finding.severity,
+            category=attack_cat,
+            component_type=ComponentType.CODE,
+            component_name=rag_finding.pattern_id,
+            file_path=rag_finding.file_path,
+            line_number=rag_finding.line_number,
+            evidence=evidence_items,
+            remediation=Remediation(
+                summary=rag_finding.remediation or "Review RAG pipeline for security issues",
+                steps=["Audit RAG pipeline configuration and data flow"],
+            ) if rag_finding.remediation else None,
+            owasp_ids=["LLM06"],
+            tags=["rag", cat_key],
+            metadata={"confidence_level": "heuristic"},
+        )
+
+    def _handle_rag_analysis(
+        self, job: PlannedJob, context: dict[str, Any]
+    ) -> JobResult:
+        """Handle RAG pipeline analysis using shared file index."""
+        from pathlib import Path as PathLib
+        from mass.analyzers.rag.analyzer import RAGAnalyzer
+        from mass.analyzers.rag.patterns import RAG_INDICATOR_PATTERNS
+
+        result = JobResult(job_id=job.id, job_type=job.job_type)
+        result.mark_started()
+
+        try:
+            path = context.get("deployment_path")
+            file_index = context.get("file_index")
+            if not path:
+                result.mark_completed()
+                return result
+
+            analyzer = RAGAnalyzer()
+            root = PathLib(path)
+
+            if file_index:
+                rag_files = self._filter_files(
+                    file_index,
+                    extensions={".py"},
+                    name_patterns=RAG_INDICATOR_PATTERNS,
+                )
+            else:
+                rag_files = [str(f) for f in root.rglob("*.py")]
+
+            result.output["rag_files_found"] = len(rag_files)
+
+            for rel_path in rag_files:
+                abs_path = root / rel_path if file_index else PathLib(rel_path)
+                try:
+                    file_result = analyzer.analyze_file(abs_path)
+                    for rag_finding in file_result.findings:
+                        finding = self._convert_rag_finding(rag_finding)
+                        result.add_finding(finding)
+                except Exception:
+                    result.output.setdefault("errors", []).append(
+                        f"Failed to analyze: {rel_path}"
+                    )
+
+            result.items_processed = len(rag_files)
+            result.mark_completed()
+
+        except Exception as e:
+            result.mark_failed(str(e))
+
+        return result
+
     def _handle_model_interrogation(
         self, job: PlannedJob, context: dict[str, Any]
     ) -> JobResult:
@@ -2114,6 +2215,8 @@ class JobExecutor:
                     "max_concurrent_prompts",
                     _get_probe_defaults()[1],
                 )),
+                adaptive_rounds=int(job_cfg.get("adaptive_rounds", 0)),
+                adaptive_max_mutations=int(job_cfg.get("adaptive_max_mutations", 5)),
             )
 
             # Pass remediation cache for enriched finding guidance

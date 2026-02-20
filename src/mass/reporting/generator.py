@@ -25,6 +25,7 @@ class ReportFormat(str, Enum):
     HTML = "html"
     JSON = "json"
     PDF = "pdf"  # Placeholder for future PDF support
+    AIBOM = "aibom"
 
 
 @dataclass
@@ -159,6 +160,18 @@ class ReportGenerator:
                 verdict=verdict, threat_model=threat_model,
             )
             filename = f"mass_report_{timestamp}.json"
+        elif format == ReportFormat.AIBOM:
+            from mass.reporting.formats.aibom import AIBOMGenerator
+            bom_gen = AIBOMGenerator()
+            content = bom_gen.generate_json(
+                findings=findings,
+                scan_id=scan_id,
+                deployment_name=metadata.get("deployment_name", "") if metadata else "",
+                deployment_path=metadata.get("deployment_path", "") if metadata else "",
+                scan_metadata=metadata,
+                architecture_map=metadata.get("architecture_map") if metadata else None,
+            )
+            filename = f"mass_aibom_{timestamp}.cdx.json"
         elif format == ReportFormat.PDF:
             # PDF generation placeholder
             content = self._generate_pdf_placeholder(findings)

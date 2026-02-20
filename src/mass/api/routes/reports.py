@@ -325,6 +325,7 @@ async def generate_report(
         "html": ReportFormat.HTML,
         "json": ReportFormat.JSON,
         "pdf": ReportFormat.PDF,
+        "aibom": ReportFormat.AIBOM,
     }
     report_format = format_map.get(request.format.lower(), ReportFormat.JSON)
 
