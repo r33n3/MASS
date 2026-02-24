@@ -28,6 +28,7 @@ class JobType(str, Enum):
     MODEL_INTERROGATION = "model_interrogation"
     ARCHITECTURE_ANALYSIS = "architecture_analysis"
     RAG_ANALYSIS = "rag_analysis"
+    CODE_SECURITY_AUDIT = "code_security_audit"
 
 
 @dataclass
@@ -403,6 +404,20 @@ class ScanPlanner:
                     if job.job_type == JobType.ATTACK_SURFACE:
                         job.config["architecture_entry_points"] = arch["entry_points"]
                         job.config["architecture_pattern"] = arch.get("pattern", "unknown")
+
+        # 2c. Code security audit (depends on deployment scan + architecture)
+        if self.profile.code_security_analyzer.enabled:
+            job = PlannedJob(
+                job_type=JobType.CODE_SECURITY_AUDIT,
+                name="Code Security Audit",
+                description="Static grep + LLM verification for application security vulnerabilities",
+                priority=self.profile.code_security_analyzer.priority,
+                timeout_seconds=self.profile.code_security_analyzer.timeout_seconds,
+                depends_on=depends,
+                config=self.profile.code_security_analyzer.options,
+            )
+            plan.add_job(job)
+            static_analysis_ids.append(job.id)
 
         # 3. Attack surface analysis (depends on static analysis)
         if self.profile.attack_surface_analyzer.enabled:

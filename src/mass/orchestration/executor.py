@@ -171,6 +171,7 @@ class JobExecutor:
         self._handlers[JobType.ATTACK_SURFACE] = self._handle_attack_surface
         self._handlers[JobType.WORKFLOW_ANALYSIS] = self._handle_workflow_analysis
         self._handlers[JobType.RAG_ANALYSIS] = self._handle_rag_analysis
+        self._handlers[JobType.CODE_SECURITY_AUDIT] = self._handle_code_security_audit
         self._handlers[JobType.MODEL_INTERROGATION] = self._handle_model_interrogation
 
     def register_handler(self, job_type: JobType, handler: JobHandler) -> None:
@@ -2163,6 +2164,105 @@ class JobExecutor:
                     )
 
             result.items_processed = len(rag_files)
+            result.mark_completed()
+
+        except Exception as e:
+            result.mark_failed(str(e))
+
+        return result
+
+    def _handle_code_security_audit(
+        self, job: PlannedJob, context: dict[str, Any]
+    ) -> JobResult:
+        """Handle code security audit job.
+
+        Runs Phase A (static grep) and optionally Phase B (LLM verification)
+        to find application security vulnerabilities in code.
+        """
+        import asyncio
+        from pathlib import Path as PathLib
+        from mass.analyzers.code_security.audit import AuditConfig, CodeSecurityAuditor
+        from mass.core.types import Severity as SevEnum
+
+        result = JobResult(job_id=job.id, job_type=job.job_type)
+        result.mark_started()
+
+        try:
+            path = context.get("deployment_path")
+            if not path:
+                result.mark_completed()
+                result.output["message"] = "No deployment path provided"
+                return result
+
+            # Build config from job config + context
+            opts = dict(job.config)
+            llm_verification = opts.pop("llm_verification", True)
+
+            sev_threshold_str = opts.pop("llm_severity_threshold", "medium")
+            sev_map = {
+                "critical": SevEnum.CRITICAL,
+                "high": SevEnum.HIGH,
+                "medium": SevEnum.MEDIUM,
+                "low": SevEnum.LOW,
+            }
+            sev_threshold = sev_map.get(sev_threshold_str, SevEnum.MEDIUM)
+
+            config = AuditConfig(
+                llm_verification=llm_verification,
+                llm_severity_threshold=sev_threshold,
+                max_candidates_for_llm=int(opts.pop("max_candidates_for_llm", 50)),
+                min_confidence=float(opts.pop("min_confidence", 0.7)),
+                provider=context.get("llm_provider", opts.pop("provider", "ollama")),
+                model=context.get("llm_model", opts.pop("model", None)),
+                api_key=context.get("llm_api_key", opts.pop("api_key", None)),
+                endpoint=context.get("llm_endpoint", opts.pop("endpoint", None)),
+            )
+
+            architecture_map = context.get("_architecture_map")
+
+            auditor = CodeSecurityAuditor()
+
+            # Run async audit in sync handler
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+
+            if loop and loop.is_running():
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    audit_result = pool.submit(
+                        lambda: asyncio.run(
+                            auditor.audit(
+                                PathLib(path),
+                                architecture_map=architecture_map,
+                                config=config,
+                            )
+                        )
+                    ).result()
+            else:
+                audit_result = asyncio.run(
+                    auditor.audit(
+                        PathLib(path),
+                        architecture_map=architecture_map,
+                        config=config,
+                    )
+                )
+
+            # Add findings to result
+            for finding in audit_result.findings:
+                result.add_finding(finding)
+
+            result.output["candidates_found"] = audit_result.candidates_found
+            result.output["candidates_verified"] = audit_result.candidates_verified
+            result.output["findings_confirmed"] = audit_result.findings_confirmed
+            result.output["findings_static_only"] = audit_result.findings_static_only
+            result.output["duration_phase_a"] = audit_result.duration_phase_a
+            result.output["duration_phase_b"] = audit_result.duration_phase_b
+            if audit_result.errors:
+                result.output["errors"] = audit_result.errors
+
+            result.items_processed = audit_result.candidates_found
             result.mark_completed()
 
         except Exception as e:
