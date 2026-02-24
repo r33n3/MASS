@@ -5700,6 +5700,50 @@
             height: auto;
             min-height: 200px;
         }
+        #unifiedTopologyGraph.cy-active {
+            width: 100%;
+            height: 100%;
+            min-height: 280px;
+            padding: 0 !important;
+        }
+        .cy-tooltip {
+            position: absolute;
+            z-index: 9999;
+            pointer-events: none;
+            background: var(--bg-void);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 0.375rem 0.625rem;
+            font-size: 0.6875rem;
+            color: var(--text-secondary);
+            font-family: var(--font-mono);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+            max-width: 280px;
+            line-height: 1.4;
+            white-space: pre-line;
+        }
+        .cy-tooltip .tt-label { color: var(--text-primary); font-weight: 600; }
+        .cy-tooltip .tt-type { color: var(--text-muted); font-size: 0.625rem; }
+        .cy-tooltip .tt-threat { color: var(--rust-bright); font-size: 0.625rem; margin-top: 2px; }
+        .topo-controls-bar {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            flex-wrap: wrap;
+        }
+        .topo-ctrl-btn {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            border-radius: 3px;
+            color: var(--text-muted);
+            font-size: 0.5625rem;
+            font-family: var(--font-mono);
+            padding: 2px 6px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .topo-ctrl-btn:hover { border-color: var(--toxic-dark); color: var(--text-secondary); }
+        .topo-ctrl-btn.active { border-color: var(--toxic); color: var(--toxic); background: var(--toxic-dim); }
         .tm-topo-header {
             display: flex;
             align-items: center;
@@ -9854,7 +9898,17 @@
                                     <div class="tm-topo-header">
                                         <span style="font-size:0.6875rem;font-weight:600;color:var(--text-secondary);font-family:var(--font-mono);">/// Topology</span>
                                         <div class="topo-legend-inline">
-                                            <button class="topo-fit-btn" onclick="_topoFitView()" title="Fit to panel">&#x2922;</button>
+                                            <div class="topo-controls-bar">
+                                                <button class="topo-fit-btn" onclick="_topoFitView()" title="Fit to panel">&#x2922;</button>
+                                                <button class="topo-ctrl-btn active" onclick="_topoSetLayout('dagre')" data-layout="dagre" title="Hierarchical layout">Dagre</button>
+                                                <button class="topo-ctrl-btn" onclick="_topoSetLayout('cose-bilkent')" data-layout="cose-bilkent" title="Force-directed layout">Force</button>
+                                                <button class="topo-ctrl-btn" onclick="_topoSetLayout('concentric')" data-layout="concentric" title="Concentric layout">Ring</button>
+                                                <span style="width:1px;height:12px;background:var(--border);"></span>
+                                                <button class="topo-ctrl-btn" onclick="_topoToggleHeatmap()" id="topoHeatmapBtn" title="Toggle risk heatmap">Heat</button>
+                                                <button class="topo-ctrl-btn" onclick="_topoExport('png')" title="Export PNG">PNG</button>
+                                                <button class="topo-ctrl-btn" onclick="_topoExport('svg')" title="Export SVG">SVG</button>
+                                            </div>
+                                            <span style="width:1px;height:12px;background:var(--border);"></span>
                                             <span class="badge topo-legend-badge" style="--lc:#7FFF00;">Agent</span>
                                             <span class="badge topo-legend-badge" style="--lc:#9ACD32;">Model</span>
                                             <span class="badge topo-legend-badge" style="--lc:#e07850;">MCP</span>
@@ -10615,6 +10669,53 @@
                     <div id="activityOverrideRows"></div>
                 </div>
                 <hr style="border-color: var(--border); margin: 1rem 0;">
+                <!-- System Directories (collapsible) -->
+                <h3 style="color: var(--accent); font-size: 0.9rem; margin-bottom: 0.5rem; cursor:pointer; user-select:none;"
+                    onclick="toggleSystemDirs()">
+                    System Directories
+                    <span id="systemDirsToggle" style="font-size:0.7rem;color:var(--text-secondary);font-weight:normal;margin-left:0.35rem;">[+] expand</span>
+                </h3>
+                <p style="font-size:0.75rem;color:var(--text-secondary);margin-bottom:0.75rem;">
+                    Configure where MASS reads targets and writes outputs. Changes are persisted across restarts.
+                </p>
+                <div id="systemDirsSection" style="display:none;">
+                    <div class="form-group">
+                        <label class="form-label">Scan Targets Directory</label>
+                        <input type="text" class="form-input mono" id="settingsTargetsDir" placeholder="/app/targets">
+                        <span style="font-size:0.7rem;color:var(--text-secondary);display:block;margin-top:0.2rem;">Source code projects for static analysis</span>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Downloads Directory</label>
+                        <input type="text" class="form-input mono" id="settingsDownloadsDir" placeholder="/app/downloads">
+                        <span style="font-size:0.7rem;color:var(--text-secondary);display:block;margin-top:0.2rem;">Downloaded/uploaded artifacts and temporary scan inputs</span>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">GitHub Clones Directory</label>
+                        <input type="text" class="form-input mono" id="settingsGithubClonesDir" placeholder="/app/github_clones">
+                        <span style="font-size:0.7rem;color:var(--text-secondary);display:block;margin-top:0.2rem;">Cloned GitHub repositories</span>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Strategies Directory</label>
+                        <input type="text" class="form-input mono" id="settingsStrategiesDir" placeholder="/app/data/strategies">
+                        <span style="font-size:0.7rem;color:var(--text-secondary);display:block;margin-top:0.2rem;">Custom interrogation strategy YAML files</span>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Reports Output Directory</label>
+                        <input type="text" class="form-input mono" id="settingsReportsDir" placeholder="/app/data/reports">
+                        <span style="font-size:0.7rem;color:var(--text-secondary);display:block;margin-top:0.2rem;">Generated reports (PDF, HTML, SARIF, JSON, AIBOM)</span>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Sandbox Scenarios Directory</label>
+                        <input type="text" class="form-input mono" id="settingsSandboxScenariosDir" placeholder="/app/data/sandbox/scenarios">
+                        <span style="font-size:0.7rem;color:var(--text-secondary);display:block;margin-top:0.2rem;">Custom sandbox scenario YAML files</span>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Guardrails Export Directory</label>
+                        <input type="text" class="form-input mono" id="settingsGuardrailsExportDir" placeholder="/app/data/guardrails_export">
+                        <span style="font-size:0.7rem;color:var(--text-secondary);display:block;margin-top:0.2rem;">Auto-exported guardrail sets, policies, and platform configs (AWS Bedrock, LiteLLM)</span>
+                    </div>
+                </div>
+                <hr style="border-color: var(--border); margin: 1rem 0;">
                 <h3 style="color: var(--accent); font-size: 0.9rem; margin-bottom: 0.75rem;">Chat Assistant <span style="font-size:0.7rem;color:var(--text-secondary);font-weight:normal;">(leave blank to use platform defaults)</span></h3>
                 <div class="form-group">
                     <label class="form-label">Chat Provider</label>
@@ -10926,7 +11027,7 @@
                         <div class="form-section-title">Source Location</div>
                         <div class="source-tabs" id="addTargetSourceTabs">
                             <div class="source-tab active" onclick="switchSourceTab(this,'local')">Local</div>
-                            <div class="source-tab" onclick="switchSourceTab(this,'github')">GitHub</div>
+                            <div class="source-tab" onclick="switchSourceTab(this,'github')">Git</div>
                             <div class="source-tab" onclick="switchSourceTab(this,'s3')">AWS S3</div>
                             <div class="source-tab" onclick="switchSourceTab(this,'azure')">Azure Blob</div>
                             <div class="source-tab" onclick="switchSourceTab(this,'gcs')">GCS</div>
@@ -10940,19 +11041,20 @@
                                            placeholder="/app/targets/my-project" oninput="autoFillTargetName()" style="flex:1;">
                                     <button type="button" class="browse-btn" onclick="toggleBrowseTree()">Browse</button>
                                 </div>
-                                <div class="form-hint">Mounted directory or file path inside the container</div>
+                                <div class="form-hint">Path on your local machine (e.g. C:\Users\...) or inside the container (/app/targets/...)</div>
                             </div>
                             <div id="browseTreeContainer" class="browse-tree-container" style="display:none;">
                                 <div class="browse-tree-breadcrumb" id="browseTreeBreadcrumb"></div>
                                 <div id="browseTreeEntries"></div>
                             </div>
                         </div>
-                        <!-- GitHub -->
+                        <!-- GitHub / Git Remote -->
                         <div class="source-tab-content" id="sourceTabGithub">
                             <div class="form-group">
-                                <label class="form-label">GitHub URL</label>
+                                <label class="form-label">Git URL</label>
                                 <input type="text" class="form-input mono" id="addTargetGithubUrl"
                                        placeholder="https://github.com/owner/repo" oninput="autoFillTargetName()">
+                                <div class="form-hint">GitHub, GitLab, Bitbucket, or any git remote (HTTPS or SSH)</div>
                             </div>
                             <div class="form-group">
                                 <label class="form-label">Branch / Tag (optional)</label>
@@ -10962,28 +11064,49 @@
                         <!-- S3 -->
                         <div class="source-tab-content" id="sourceTabS3">
                             <div class="form-group">
+                                <label class="form-label">Cloud Account</label>
+                                <select class="form-input" id="addTargetS3Account">
+                                    <option value="">None (use environment credentials)</option>
+                                </select>
+                                <div class="form-hint">Select a registered AWS account or use environment credentials</div>
+                            </div>
+                            <div class="form-group">
                                 <label class="form-label">S3 URI</label>
                                 <input type="text" class="form-input mono" id="addTargetS3Uri"
                                        placeholder="s3://bucket-name/path/to/project" oninput="autoFillTargetName()">
-                                <div class="form-hint">Uses AWS credentials from environment (IAM role or env vars)</div>
+                                <div class="form-hint">S3 bucket URI — files will be downloaded in the background</div>
                             </div>
                         </div>
                         <!-- Azure -->
                         <div class="source-tab-content" id="sourceTabAzure">
                             <div class="form-group">
+                                <label class="form-label">Cloud Account</label>
+                                <select class="form-input" id="addTargetAzureAccount">
+                                    <option value="">None (use environment credentials)</option>
+                                </select>
+                                <div class="form-hint">Select a registered Azure account or use environment credentials</div>
+                            </div>
+                            <div class="form-group">
                                 <label class="form-label">Azure Blob URL</label>
                                 <input type="text" class="form-input mono" id="addTargetAzureUrl"
                                        placeholder="https://account.blob.core.windows.net/container/path" oninput="autoFillTargetName()">
-                                <div class="form-hint">Uses Azure credentials from environment (managed identity or env vars)</div>
+                                <div class="form-hint">Azure Blob URL — files will be downloaded in the background</div>
                             </div>
                         </div>
                         <!-- GCS -->
                         <div class="source-tab-content" id="sourceTabGcs">
                             <div class="form-group">
+                                <label class="form-label">Cloud Account</label>
+                                <select class="form-input" id="addTargetGcsAccount">
+                                    <option value="">None (use environment credentials)</option>
+                                </select>
+                                <div class="form-hint">Select a registered GCP account or use environment credentials</div>
+                            </div>
+                            <div class="form-group">
                                 <label class="form-label">GCS URI</label>
                                 <input type="text" class="form-input mono" id="addTargetGcsUri"
                                        placeholder="gs://bucket-name/path/to/project" oninput="autoFillTargetName()">
-                                <div class="form-hint">Uses Google Cloud credentials from environment (service account)</div>
+                                <div class="form-hint">GCS bucket URI — files will be downloaded in the background</div>
                             </div>
                         </div>
                         <div class="form-group" style="display:flex;align-items:center;gap:0.75rem;">
@@ -11340,8 +11463,15 @@
         </div>
     </div>
 
-    <!-- Mermaid.js for topology + component flow diagrams -->
+    <!-- Mermaid.js for component flow diagrams -->
     <script src="https://unpkg.com/mermaid@11/dist/mermaid.min.js"></script>
+
+    <!-- Cytoscape.js for interactive threat model topology -->
+    <script src="https://unpkg.com/dagre@0.8/dist/dagre.min.js"></script>
+    <script src="https://unpkg.com/cytoscape@3/dist/cytoscape.min.js"></script>
+    <script src="https://unpkg.com/cytoscape-dagre@2/cytoscape-dagre.js"></script>
+    <script src="https://unpkg.com/cytoscape-cose-bilkent@4/cytoscape-cose-bilkent.js"></script>
+    <script src="https://unpkg.com/cytoscape-svg@0.4/cytoscape-svg.js"></script>
 
     <script>
         // ═══════════════════════════════════════════════════════════════════
@@ -12537,9 +12667,14 @@
 
         // ── AI Threat Model Rendering ──
 
-        let _topoRendered = false; // Topology rendered flag (Mermaid-based)
+        let _topoRendered = false; // Topology rendered flag
         let _topoNodeMap = []; // Stored node metadata for click handlers + risk coloring
         let _lastThreatModel = null; // Cached for topology merge
+        let _cyInstance = null; // Cytoscape.js graph instance
+        let _cyTooltipEl = null; // Reusable tooltip element
+        let _topoCurrentLayout = 'dagre'; // Current layout algorithm
+        let _topoHeatmapActive = false; // Risk heatmap mode toggle
+        let _cyLastRenderData = null; // Cached {detail, threatModel} for re-layout
 
         async function _loadAndRenderThreatModel(scanId) {
             try {
@@ -12735,10 +12870,116 @@
             });
             // Re-render threat table with filter
             if (_strideLastModel) _renderThreatTable(_strideLastModel, filter);
+            // Highlight affected nodes on topology graph
+            _topoHighlightStride(filter);
         }
 
-        // ── Unified System Topology (Mermaid-based) ──
-        // Merges deployment topology + threat model data into one Mermaid graph
+        // ── Unified System Topology (Cytoscape.js-based) ──
+        // Merges deployment topology + threat model data into an interactive Cytoscape graph
+
+        // Node type → Cytoscape shape + color mapping (matches old Mermaid classDef colors)
+        const _cyNodeStyles = {
+            'ai_agent':       { shape: 'round-rectangle', color: '#7FFF00', cls: 'agent' },
+            'agent':          { shape: 'round-rectangle', color: '#7FFF00', cls: 'agent' },
+            'model_provider': { shape: 'diamond',         color: '#9ACD32', cls: 'model' },
+            'mcp_server':     { shape: 'rectangle',       color: '#e07850', cls: 'mcp' },
+            'tool':           { shape: 'tag',             color: '#c45c3a', cls: 'tool' },
+            'database':       { shape: 'barrel',          color: '#d4a03a', cls: 'datastore' },
+            'vector_store':   { shape: 'barrel',          color: '#d4a03a', cls: 'datastore' },
+            'memory':         { shape: 'rectangle',       color: '#a8a498', cls: 'mem' },
+            'cloud_service':  { shape: 'ellipse',         color: '#5d8a4a', cls: 'cloud' },
+            'api_service':    { shape: 'rectangle',       color: '#8a9d68', cls: 'api' },
+            'trigger':        { shape: 'vee',             color: '#6b6a60', cls: 'trigger' },
+            'router':         { shape: 'diamond',         color: '#e07850', cls: 'mcp' },
+        };
+
+        // Data classification → edge color
+        const _cyClassificationColors = {
+            'public': '#5d8a4a',
+            'internal': '#d4a03a',
+            'confidential': '#e07850',
+            'restricted': '#e74c3c',
+        };
+
+        // Trust boundary zone colors (soft, distinct backgrounds)
+        const _cyZoneColors = [
+            { bg: 'rgba(127,255,0,0.06)', border: 'rgba(127,255,0,0.25)' },
+            { bg: 'rgba(224,120,80,0.06)', border: 'rgba(224,120,80,0.25)' },
+            { bg: 'rgba(212,160,58,0.06)', border: 'rgba(212,160,58,0.25)' },
+            { bg: 'rgba(93,138,74,0.06)',  border: 'rgba(93,138,74,0.25)' },
+            { bg: 'rgba(138,157,104,0.06)',border: 'rgba(138,157,104,0.25)' },
+        ];
+
+        function _cyEnsureTooltip() {
+            if (_cyTooltipEl) return _cyTooltipEl;
+            _cyTooltipEl = document.createElement('div');
+            _cyTooltipEl.className = 'cy-tooltip';
+            _cyTooltipEl.style.display = 'none';
+            document.body.appendChild(_cyTooltipEl);
+            return _cyTooltipEl;
+        }
+
+        function _cyShowTooltip(evt, html) {
+            const tip = _cyEnsureTooltip();
+            tip.innerHTML = html;
+            tip.style.display = 'block';
+            const pos = evt.renderedPosition || evt.position;
+            const containerRect = document.getElementById('unifiedTopologyGraph').getBoundingClientRect();
+            tip.style.left = (containerRect.left + pos.x + 12) + 'px';
+            tip.style.top = (containerRect.top + pos.y - 8) + 'px';
+        }
+
+        function _cyHideTooltip() {
+            if (_cyTooltipEl) _cyTooltipEl.style.display = 'none';
+        }
+
+        function _cyGetLayoutConfig(name) {
+            if (name === 'cose-bilkent') {
+                return {
+                    name: 'cose-bilkent',
+                    animate: 'end',
+                    animationDuration: 300,
+                    nodeRepulsion: 6000,
+                    idealEdgeLength: 80,
+                    edgeElasticity: 0.1,
+                    nestingFactor: 0.2,
+                    gravity: 0.3,
+                    numIter: 2500,
+                    tile: true,
+                    fit: true,
+                    padding: 20,
+                };
+            }
+            if (name === 'concentric') {
+                return {
+                    name: 'concentric',
+                    animate: true,
+                    animationDuration: 300,
+                    fit: true,
+                    padding: 20,
+                    minNodeSpacing: 40,
+                    concentric: function(node) {
+                        // Parent (zone) nodes go to the outside ring, threatened nodes to center
+                        if (node.data('isZone')) return 1;
+                        if (node.data('hasThreat')) return 4;
+                        return 2;
+                    },
+                    levelWidth: function() { return 2; },
+                };
+            }
+            // Default: dagre (hierarchical LR)
+            return {
+                name: 'dagre',
+                rankDir: 'LR',
+                nodeSep: 40,
+                rankSep: 60,
+                edgeSep: 20,
+                animate: true,
+                animationDuration: 300,
+                fit: true,
+                padding: 20,
+            };
+        }
 
         async function _renderTopology(detail, threatModel) {
             const container = document.getElementById('unifiedTopologyGraph');
@@ -12762,36 +13003,28 @@
                 return;
             }
 
-            if (typeof mermaid === 'undefined') {
+            if (typeof cytoscape === 'undefined') {
                 container.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:0.75rem;">Diagram library loading...</div>';
                 if (topoCol) topoCol.style.display = '';
                 return;
             }
 
+            // Cache render data for re-layout
+            _cyLastRenderData = { detail, threatModel };
+
             function sanitize(str) {
                 return (str || '').replace(/["'`<>{}|\\\[\]\(\)\/:#&;\u2192\u2190\u2194]/g, '').replace(/\n/g, ' ').trim().substring(0, 30).replace(/[-_.,\s]+$/, '') || 'node';
             }
 
-            // ── Node type → Mermaid shape mapping ──
-            const nodeShapes = {
-                'ai_agent':       { cls: 'agent',   shape: (id, l) => `${id}(["${l}"])` },
-                'agent':          { cls: 'agent',   shape: (id, l) => `${id}(["${l}"])` },
-                'model_provider': { cls: 'model',   shape: (id, l) => `${id}{{"${l}"}}` },
-                'mcp_server':     { cls: 'mcp',     shape: (id, l) => `${id}[["${l}"]]` },
-                'tool':           { cls: 'tool',    shape: (id, l) => `${id}[/"${l}"/]` },
-                'database':       { cls: 'datastore', shape: (id, l) => `${id}[("${l}")]` },
-                'vector_store':   { cls: 'datastore', shape: (id, l) => `${id}[("${l}")]` },
-                'memory':         { cls: 'mem',     shape: (id, l) => `${id}["${l}"]` },
-                'cloud_service':  { cls: 'cloud',   shape: (id, l) => `${id}(("${l}"))` },
-                'api_service':    { cls: 'api',     shape: (id, l) => `${id}["${l}"]` },
-                'trigger':        { cls: 'trigger', shape: (id, l) => `${id}>"${l}"]` },
-                'router':         { cls: 'mcp',     shape: (id, l) => `${id}{"${l}"}` },
-            };
-
-            // ── Collect threatened nodes ──
+            // ── Collect threatened nodes + threat info per component ──
             const threatenedNodes = new Set();
+            const nodeThreats = {}; // origId → [threat objects]
             for (const t of threats) {
-                for (const comp of (t.affected_components || [])) threatenedNodes.add(comp);
+                for (const comp of (t.affected_components || [])) {
+                    threatenedNodes.add(comp);
+                    if (!nodeThreats[comp]) nodeThreats[comp] = [];
+                    nodeThreats[comp].push(t);
+                }
             }
 
             // ── Map nodes → trust boundary zones ──
@@ -12809,7 +13042,7 @@
             // ── Build unified node list (dedup assets + topo nodes) ──
             const seenNodes = new Set();
             const allNodes = [];
-            const idMap = {}; // original id → mermaid safe id
+            const idMap = {};
             let nIdx = 0;
 
             for (const asset of assets) {
@@ -12824,6 +13057,8 @@
                     label: sanitize(asset.label || asset.name || origId),
                     zone: nodeToZone[origId] || null,
                     hasThreat: threatenedNodes.has(origId),
+                    threatCount: (nodeThreats[origId] || []).length,
+                    threats: nodeThreats[origId] || [],
                 });
             }
 
@@ -12839,6 +13074,8 @@
                     label: sanitize(node.label || node.name || origId),
                     zone: nodeToZone[origId] || null,
                     hasThreat: threatenedNodes.has(origId),
+                    threatCount: (nodeThreats[origId] || []).length,
+                    threats: nodeThreats[origId] || [],
                 });
             }
 
@@ -12847,64 +13084,54 @@
                 return;
             }
 
-            // ── Build Mermaid graph definition ──
-            let lines = ['graph LR'];
+            // ── Build Cytoscape elements ──
+            const elements = [];
 
-            // Class definitions matching existing color scheme
-            lines.push('    classDef agent stroke:#7FFF00,fill:#1a2618,color:#7FFF00,stroke-width:2px');
-            lines.push('    classDef model stroke:#9ACD32,fill:#1a2618,color:#9ACD32,stroke-width:2px');
-            lines.push('    classDef mcp stroke:#e07850,fill:#1a2618,color:#e07850,stroke-width:2px');
-            lines.push('    classDef tool stroke:#c45c3a,fill:#1a2618,color:#c45c3a,stroke-width:2px');
-            lines.push('    classDef datastore stroke:#d4a03a,fill:#1a2618,color:#d4a03a,stroke-width:2px');
-            lines.push('    classDef mem stroke:#a8a498,fill:#1a2618,color:#a8a498,stroke-width:1px');
-            lines.push('    classDef cloud stroke:#5d8a4a,fill:#1a2618,color:#5d8a4a,stroke-width:2px');
-            lines.push('    classDef api stroke:#8a9d68,fill:#1a2618,color:#8a9d68,stroke-width:2px');
-            lines.push('    classDef trigger stroke:#6b6a60,fill:#1a2618,color:#6b6a60,stroke-width:1px');
-            lines.push('    classDef threatened stroke:#e07850,fill:#1a1210,color:#e07850,stroke-width:3px,stroke-dasharray:5');
-
-            // Group nodes by zone
-            const zoneNodes = {};
-            const noZoneNodes = [];
-            for (const nd of allNodes) {
-                if (nd.zone) {
-                    if (!zoneNodes[nd.zone]) zoneNodes[nd.zone] = [];
-                    zoneNodes[nd.zone].push(nd);
-                } else {
-                    noZoneNodes.push(nd);
-                }
-            }
-
-            // Zone labels from boundaries
-            const zoneLabels = {};
-            for (const tb of boundaries) {
-                zoneLabels[tb.id] = sanitize(tb.name || tb.id);
-            }
-
-            // Render subgraphs for trust boundaries
+            // Trust boundary compound (parent) nodes
             let zIdx = 0;
-            const zoneMermaidIds = {};
-            for (const [zoneId, nodes] of Object.entries(zoneNodes)) {
-                const zLabel = zoneLabels[zoneId] || sanitize(zoneId);
-                const safeZoneId = 'Z' + zIdx++;
-                zoneMermaidIds[zoneId] = safeZoneId;
-                lines.push(`    subgraph ${safeZoneId}["${zLabel}"]`);
-                for (const nd of nodes) {
-                    const ts = nodeShapes[nd.nodeType] || { cls: 'mem', shape: (id, l) => `${id}["${l}"]` };
-                    const cls = nd.hasThreat ? 'threatened' : ts.cls;
-                    lines.push(`        ${ts.shape(nd.mId, nd.label)}:::${cls}`);
-                }
-                lines.push('    end');
+            const zoneIdMap = {};
+            for (const tb of boundaries) {
+                const hasChildren = allNodes.some(nd => nd.zone === tb.id);
+                if (!hasChildren) continue;
+                const cyZoneId = 'zone_' + zIdx;
+                zoneIdMap[tb.id] = cyZoneId;
+                const zoneColor = _cyZoneColors[zIdx % _cyZoneColors.length];
+                elements.push({
+                    group: 'nodes',
+                    data: {
+                        id: cyZoneId,
+                        label: sanitize(tb.name || tb.id),
+                        isZone: true,
+                        zoneBg: zoneColor.bg,
+                        zoneBorder: zoneColor.border,
+                        trustLevel: tb.trust_level || '',
+                    },
+                });
+                zIdx++;
             }
 
-            // Render non-zone nodes
-            for (const nd of noZoneNodes) {
-                const ts = nodeShapes[nd.nodeType] || { cls: 'mem', shape: (id, l) => `${id}["${l}"]` };
-                const cls = nd.hasThreat ? 'threatened' : ts.cls;
-                lines.push(`    ${ts.shape(nd.mId, nd.label)}:::${cls}`);
+            // Component nodes
+            for (const nd of allNodes) {
+                const style = _cyNodeStyles[nd.nodeType] || _cyNodeStyles['memory'];
+                const data = {
+                    id: nd.mId,
+                    label: nd.label,
+                    nodeType: nd.nodeType,
+                    origId: nd.origId,
+                    hasThreat: nd.hasThreat,
+                    threatCount: nd.threatCount,
+                    nodeColor: style.color,
+                    nodeShape: style.shape,
+                    nodeCls: style.cls,
+                };
+                // Assign parent for trust boundary grouping
+                if (nd.zone && zoneIdMap[nd.zone]) {
+                    data.parent = zoneIdMap[nd.zone];
+                }
+                elements.push({ group: 'nodes', data });
             }
 
             // Edges from threat model data flows
-            // Use pipe-delimited labels (-->|text|) for maximum Mermaid v11 compatibility
             const seenEdges = new Set();
             for (const df of dataFlows) {
                 const srcId = idMap[df.source_node];
@@ -12913,16 +13140,24 @@
                 const eid = srcId + '->' + tgtId;
                 if (seenEdges.has(eid)) continue;
                 seenEdges.add(eid);
-                const label = sanitize((df.data_types || []).slice(0, 2).join(', '));
+                const label = (df.data_types || []).slice(0, 2).join(', ');
                 const edgeOrigId = df.edge_id || (df.source_node + '-' + df.target_node);
                 const isCrossing = crossingEdgeIds.has(edgeOrigId) || df.crosses_trust_boundary;
-                if (isCrossing) {
-                    lines.push(label ? `    ${srcId} -.->|${label}| ${tgtId}` : `    ${srcId} -.-> ${tgtId}`);
-                } else if (label) {
-                    lines.push(`    ${srcId} -->|${label}| ${tgtId}`);
-                } else {
-                    lines.push(`    ${srcId} --> ${tgtId}`);
-                }
+                const classification = (df.classification || '').toLowerCase();
+                elements.push({
+                    group: 'edges',
+                    data: {
+                        id: 'e_' + eid,
+                        source: srcId,
+                        target: tgtId,
+                        label: sanitize(label),
+                        isCrossing,
+                        classification,
+                        dataTypes: (df.data_types || []).join(', '),
+                        crossesBoundary: isCrossing,
+                        edgeSource: 'dataflow',
+                    },
+                });
             }
 
             // Edges from deployment topology
@@ -12935,73 +13170,263 @@
                 seenEdges.add(eid);
                 const label = sanitize(edge.label || '');
                 const edgeType = edge.type || edge.edge_type || 'flow';
-                if (edgeType === 'conditional') {
-                    lines.push(label ? `    ${srcId} -.->|${label}| ${tgtId}` : `    ${srcId} -.-> ${tgtId}`);
-                } else if (label) {
-                    lines.push(`    ${srcId} -->|${label}| ${tgtId}`);
-                } else {
-                    lines.push(`    ${srcId} --> ${tgtId}`);
-                }
+                elements.push({
+                    group: 'edges',
+                    data: {
+                        id: 'e_' + eid,
+                        source: srcId,
+                        target: tgtId,
+                        label,
+                        isCrossing: edgeType === 'conditional',
+                        classification: '',
+                        edgeSource: 'topology',
+                    },
+                });
             }
 
-            // Subgraph zone styling
-            for (const zoneId of Object.keys(zoneNodes)) {
-                const safeZoneId = zoneMermaidIds[zoneId] || zoneId;
-                lines.push(`    style ${safeZoneId} fill:#1e2319,stroke:#3a3c38,stroke-width:1px,stroke-dasharray:5,color:#6b6a60`);
+            console.debug('[MASS] Cytoscape topology (%d nodes, %d edges, %d zones)', allNodes.length, seenEdges.size, Object.keys(zoneIdMap).length);
+
+            // ── Destroy old instance ──
+            if (_cyInstance) {
+                _cyInstance.destroy();
+                _cyInstance = null;
             }
 
-            const graphDef = lines.join('\n');
+            // Prepare container
+            container.innerHTML = '';
+            container.classList.add('cy-active');
 
-            console.debug('[MASS] Topology graph def (%d nodes, %d lines):\n', allNodes.length, lines.length, graphDef);
-
+            // Register layout extensions (CDN scripts auto-register when cytoscape is global,
+            // but we guard with try/catch for robustness)
             try {
-                const uniqueId = 'mermaid-topo-' + (++_mermaidCounter);
-                const { svg } = await mermaid.render(uniqueId, graphDef);
-                container.innerHTML = svg;
-                _topoRendered = true;
-                _topoNodeMap = allNodes;
+                if (typeof cytoscapeDagre !== 'undefined' && !cytoscape._dagreRegistered) {
+                    cytoscape.use(cytoscapeDagre);
+                    cytoscape._dagreRegistered = true;
+                }
+            } catch (e) { /* dagre extension likely already registered */ }
+            try {
+                if (typeof cytoscapeCoseBilkent !== 'undefined' && !cytoscape._coseBilkentRegistered) {
+                    cytoscape.use(cytoscapeCoseBilkent);
+                    cytoscape._coseBilkentRegistered = true;
+                }
+            } catch (e) { /* cose-bilkent extension likely already registered */ }
+            try {
+                if (typeof cytoscapeSvg !== 'undefined' && !cytoscape._svgRegistered) {
+                    cytoscape.use(cytoscapeSvg);
+                    cytoscape._svgRegistered = true;
+                }
+            } catch (e) { /* svg extension likely already registered */ }
 
-                // Add click handlers + tooltips to rendered SVG nodes
-                for (const nd of allNodes) {
-                    // Mermaid generates nodes with IDs containing our node ID
-                    const svgNode = container.querySelector(`[id*="flowchart-${nd.mId}-"]`) ||
-                                    container.querySelector(`[id*="${nd.mId}"]`);
-                    if (svgNode) {
-                        svgNode.style.cursor = 'pointer';
-                        svgNode.setAttribute('data-node-label', nd.label);
-                        svgNode.setAttribute('data-node-type', nd.nodeType);
-                        svgNode.addEventListener('click', function() {
-                            showNodeFindings(nd.label, nd.nodeType);
-                        });
-                        svgNode.addEventListener('mouseenter', function() {
-                            container.title = nd.label + ' (' + nd.nodeType + ')' + (nd.hasThreat ? ' — THREATS IDENTIFIED' : '');
-                        });
-                        svgNode.addEventListener('mouseleave', function() {
-                            container.title = '';
-                        });
+            // ── Initialize Cytoscape ──
+            _cyInstance = cytoscape({
+                container: container,
+                elements: elements,
+                minZoom: 0.2,
+                maxZoom: 4,
+                wheelSensitivity: 0.3,
+                boxSelectionEnabled: false,
+                style: [
+                    // Zone (compound parent) nodes
+                    {
+                        selector: 'node[isZone]',
+                        style: {
+                            'shape': 'round-rectangle',
+                            'background-color': 'data(zoneBg)',
+                            'background-opacity': 1,
+                            'border-width': 1,
+                            'border-style': 'dashed',
+                            'border-color': 'data(zoneBorder)',
+                            'label': 'data(label)',
+                            'text-valign': 'top',
+                            'text-halign': 'center',
+                            'font-size': '9px',
+                            'font-family': 'JetBrains Mono, monospace',
+                            'color': '#6b6a60',
+                            'text-margin-y': -4,
+                            'padding': '16px',
+                            'compound-sizing-wrt-labels': 'include',
+                        },
+                    },
+                    // Component nodes (default)
+                    {
+                        selector: 'node[nodeType]',
+                        style: {
+                            'shape': 'data(nodeShape)',
+                            'background-color': '#1a2618',
+                            'border-width': 2,
+                            'border-color': 'data(nodeColor)',
+                            'label': 'data(label)',
+                            'text-valign': 'center',
+                            'text-halign': 'center',
+                            'font-size': '8px',
+                            'font-family': 'JetBrains Mono, monospace',
+                            'color': 'data(nodeColor)',
+                            'width': 90,
+                            'height': 36,
+                            'text-wrap': 'ellipsis',
+                            'text-max-width': '80px',
+                            'cursor': 'pointer',
+                        },
+                    },
+                    // Threatened node overlay
+                    {
+                        selector: 'node[?hasThreat][threatCount > 0]',
+                        style: {
+                            'border-width': 3,
+                            'border-style': 'dashed',
+                            'border-color': '#e07850',
+                            'background-color': '#1a1210',
+                        },
+                    },
+                    // Edges (default)
+                    {
+                        selector: 'edge',
+                        style: {
+                            'width': 1.5,
+                            'line-color': '#3a3c38',
+                            'target-arrow-color': '#3a3c38',
+                            'target-arrow-shape': 'triangle',
+                            'arrow-scale': 0.7,
+                            'curve-style': 'bezier',
+                            'label': 'data(label)',
+                            'font-size': '7px',
+                            'font-family': 'JetBrains Mono, monospace',
+                            'color': '#6b6a60',
+                            'text-rotation': 'autorotate',
+                            'text-margin-y': -8,
+                        },
+                    },
+                    // Crossing edges (dashed)
+                    {
+                        selector: 'edge[?isCrossing]',
+                        style: {
+                            'line-style': 'dashed',
+                            'line-dash-pattern': [6, 3],
+                            'line-color': '#e07850',
+                            'target-arrow-color': '#e07850',
+                        },
+                    },
+                    // Data classification edge colors
+                    {
+                        selector: 'edge[classification = "public"]',
+                        style: { 'line-color': '#5d8a4a', 'target-arrow-color': '#5d8a4a' },
+                    },
+                    {
+                        selector: 'edge[classification = "internal"]',
+                        style: { 'line-color': '#d4a03a', 'target-arrow-color': '#d4a03a' },
+                    },
+                    {
+                        selector: 'edge[classification = "confidential"]',
+                        style: { 'line-color': '#e07850', 'target-arrow-color': '#e07850' },
+                    },
+                    {
+                        selector: 'edge[classification = "restricted"]',
+                        style: { 'line-color': '#e74c3c', 'target-arrow-color': '#e74c3c' },
+                    },
+                    // Selected/highlighted state
+                    {
+                        selector: 'node.highlighted',
+                        style: {
+                            'border-width': 3,
+                            'border-color': '#7FFF00',
+                            'background-color': '#1a2618',
+                            'z-index': 10,
+                        },
+                    },
+                    {
+                        selector: 'edge.highlighted',
+                        style: {
+                            'width': 3,
+                            'line-color': '#7FFF00',
+                            'target-arrow-color': '#7FFF00',
+                            'z-index': 10,
+                        },
+                    },
+                    // Dimmed state (when filtering)
+                    {
+                        selector: 'node.dimmed',
+                        style: { 'opacity': 0.2 },
+                    },
+                    {
+                        selector: 'edge.dimmed',
+                        style: { 'opacity': 0.15 },
+                    },
+                ],
+                layout: _cyGetLayoutConfig(_topoCurrentLayout),
+            });
+
+            _topoRendered = true;
+            _topoNodeMap = allNodes;
+
+            // ── Event handlers ──
+
+            // Click node → show findings panel
+            _cyInstance.on('tap', 'node[nodeType]', function(evt) {
+                const node = evt.target;
+                showNodeFindings(node.data('label'), node.data('nodeType'));
+
+                // Highlight this node and its neighborhood
+                _cyInstance.elements().removeClass('highlighted dimmed');
+                const neighborhood = node.neighborhood().add(node);
+                _cyInstance.elements().not(neighborhood).addClass('dimmed');
+                neighborhood.addClass('highlighted');
+            });
+
+            // Click background → clear highlight
+            _cyInstance.on('tap', function(evt) {
+                if (evt.target === _cyInstance) {
+                    _cyInstance.elements().removeClass('highlighted dimmed');
+                    _cyHideTooltip();
+                }
+            });
+
+            // Hover node → tooltip
+            _cyInstance.on('mouseover', 'node[nodeType]', function(evt) {
+                const nd = evt.target.data();
+                let html = '<span class="tt-label">' + nd.label + '</span><br>';
+                html += '<span class="tt-type">' + (nd.nodeType || '').replace(/_/g, ' ') + '</span>';
+                if (nd.threatCount > 0) {
+                    html += '<br><span class="tt-threat">' + nd.threatCount + ' threat' + (nd.threatCount !== 1 ? 's' : '') + ' identified</span>';
+                    // Show top threats
+                    const nodeThts = allNodes.find(n => n.mId === nd.id);
+                    if (nodeThts && nodeThts.threats.length > 0) {
+                        const top = nodeThts.threats.slice(0, 3);
+                        for (const t of top) {
+                            html += '<br><span class="tt-threat">  \u2022 ' + sanitize(t.title || t.description || '').substring(0, 40) + '</span>';
+                        }
                     }
                 }
+                _cyShowTooltip(evt, html);
+            });
 
-                if (topoCol) topoCol.style.display = '';
-            } catch (err) {
-                console.error('[MASS] Mermaid topology render failed:', err);
-                // Fall back to simple HTML topology
-                let fallbackHtml = '<div style="padding:0.5rem;">';
-                const typeIcons = { ai_agent: 'A', model_provider: 'M', mcp_server: 'MCP', tool: 'T', database: 'DB', vector_store: 'VS' };
-                const typeColors = { ai_agent: '#7FFF00', model_provider: '#9ACD32', mcp_server: '#e07850', tool: '#c45c3a', database: '#d4a03a', vector_store: '#d4a03a' };
-                for (const nd of allNodes) {
-                    const icon = typeIcons[nd.nodeType] || '?';
-                    const color = typeColors[nd.nodeType] || '#a8a498';
-                    fallbackHtml += `<div style="display:inline-flex;align-items:center;gap:4px;margin:3px;padding:3px 8px;background:var(--bg-deep);border:1px solid ${color};border-radius:4px;font-size:0.625rem;color:${color};"><span style="font-weight:700;">[${icon}]</span> ${nd.label}</div>`;
-                }
-                fallbackHtml += '</div>';
-                container.innerHTML = fallbackHtml;
-                if (topoCol) topoCol.style.display = '';
-            }
+            _cyInstance.on('mouseout', 'node[nodeType]', function() {
+                _cyHideTooltip();
+            });
+
+            // Hover edge → tooltip with data flow info
+            _cyInstance.on('mouseover', 'edge', function(evt) {
+                const ed = evt.target.data();
+                let html = '';
+                if (ed.dataTypes) html += '<span class="tt-label">Data: ' + ed.dataTypes + '</span><br>';
+                if (ed.classification) html += '<span class="tt-type">Classification: ' + ed.classification + '</span><br>';
+                if (ed.crossesBoundary) html += '<span class="tt-threat">Crosses trust boundary</span>';
+                if (html) _cyShowTooltip(evt, html);
+            });
+
+            _cyInstance.on('mouseout', 'edge', function() {
+                _cyHideTooltip();
+            });
+
+            if (topoCol) topoCol.style.display = '';
         }
 
         function _topoFitView() {
-            // Reset scroll position of topology container to show full SVG
+            if (_cyInstance) {
+                _cyInstance.fit(undefined, 20);
+                _cyInstance.elements().removeClass('highlighted dimmed');
+                return;
+            }
+            // Fallback for non-Cytoscape (shouldn't happen)
             const container = document.getElementById('unifiedTopologyGraph');
             if (!container) return;
             const topoCol = container.closest('.tm-topo-col');
@@ -13009,18 +13434,10 @@
                 topoCol.scrollTop = 0;
                 topoCol.scrollLeft = 0;
             }
-            // Reset any inline sizing from user resize
-            const svg = container.querySelector('svg');
-            if (svg) {
-                svg.style.width = '100%';
-                svg.style.height = 'auto';
-            }
         }
 
         function _topoApplyRiskColors(findings) {
-            if (!_topoRendered || !findings || !findings.length) return;
-            const container = document.getElementById('unifiedTopologyGraph');
-            if (!container) return;
+            if (!_topoRendered || !_cyInstance || !findings || !findings.length) return;
 
             const compRisk = {};
             for (const f of findings) {
@@ -13035,27 +13452,165 @@
                 const risk = compRisk[label] || compRisk[origId];
                 if (!risk) continue;
 
-                const svgNode = container.querySelector(`[id*="flowchart-${nd.mId}-"]`) ||
-                                container.querySelector(`[id*="${nd.mId}"]`);
-                if (!svgNode) continue;
-
-                // Find the shape element (rect, polygon, circle, etc.) inside the node group
-                const shape = svgNode.querySelector('rect, polygon, circle, ellipse, path') || svgNode;
+                const cyNode = _cyInstance.getElementById(nd.mId);
+                if (!cyNode || cyNode.empty()) continue;
 
                 if (risk.critical > 0 || risk.high > 0) {
-                    shape.style.stroke = '#e74c3c';
-                    shape.style.strokeWidth = '3px';
-                    shape.style.filter = 'drop-shadow(0 0 4px rgba(231,76,60,0.4))';
+                    cyNode.style({
+                        'border-color': '#e74c3c',
+                        'border-width': 3,
+                        'background-color': '#2a1818',
+                    });
                 } else if (risk.medium > 0) {
-                    shape.style.stroke = '#f39c12';
-                    shape.style.strokeWidth = '3px';
-                    shape.style.filter = 'drop-shadow(0 0 3px rgba(243,156,18,0.3))';
+                    cyNode.style({
+                        'border-color': '#f39c12',
+                        'border-width': 3,
+                        'background-color': '#2a2418',
+                    });
                 } else {
-                    shape.style.stroke = '#27ae60';
-                    shape.style.strokeWidth = '3px';
-                    shape.style.filter = 'drop-shadow(0 0 2px rgba(39,174,96,0.2))';
+                    cyNode.style({
+                        'border-color': '#27ae60',
+                        'border-width': 3,
+                        'background-color': '#182a1a',
+                    });
                 }
             }
+        }
+
+        // ── STRIDE filter → Cytoscape highlight integration ──
+        function _topoHighlightStride(filter) {
+            if (!_cyInstance || !_topoRendered) return;
+            _cyInstance.elements().removeClass('highlighted dimmed');
+
+            if (filter === 'all') return; // Show everything normally
+
+            const pillar = _stridePillars[filter];
+            if (!pillar) return;
+
+            const tm = _lastThreatModel;
+            if (!tm || !tm.threats) return;
+
+            // Find components affected by this STRIDE category
+            const affectedComponents = new Set();
+            for (const t of tm.threats) {
+                if (pillar.cats.includes(t.stride_category)) {
+                    for (const comp of (t.affected_components || [])) {
+                        affectedComponents.add(comp);
+                    }
+                }
+            }
+
+            if (affectedComponents.size === 0) return;
+
+            // Find matching Cytoscape node IDs
+            const matchedNodeIds = [];
+            for (const nd of _topoNodeMap) {
+                if (affectedComponents.has(nd.origId)) {
+                    matchedNodeIds.push(nd.mId);
+                }
+            }
+
+            if (matchedNodeIds.length === 0) return;
+
+            const matchedNodes = _cyInstance.collection();
+            for (const nid of matchedNodeIds) {
+                matchedNodes.merge(_cyInstance.getElementById(nid));
+            }
+            const neighborhood = matchedNodes.neighborhood().add(matchedNodes);
+            _cyInstance.elements().not(neighborhood).addClass('dimmed');
+            neighborhood.addClass('highlighted');
+        }
+
+        // ── Attack path highlighting (from threat table row click) ──
+        function _topoHighlightThreat(threat) {
+            if (!_cyInstance || !_topoRendered) return;
+            _cyInstance.elements().removeClass('highlighted dimmed');
+
+            if (!threat || !threat.affected_components) return;
+
+            const matchedNodes = _cyInstance.collection();
+            for (const comp of threat.affected_components) {
+                for (const nd of _topoNodeMap) {
+                    if (nd.origId === comp) {
+                        matchedNodes.merge(_cyInstance.getElementById(nd.mId));
+                    }
+                }
+            }
+
+            if (matchedNodes.empty()) return;
+
+            // Highlight affected nodes + all connecting edges between them
+            const connected = matchedNodes.connectedEdges().add(matchedNodes);
+            _cyInstance.elements().not(connected).addClass('dimmed');
+            connected.addClass('highlighted');
+        }
+
+        // ── Layout toggle ──
+        function _topoSetLayout(name) {
+            _topoCurrentLayout = name;
+            // Update button active states
+            document.querySelectorAll('.topo-ctrl-btn[data-layout]').forEach(function(btn) {
+                btn.classList.toggle('active', btn.getAttribute('data-layout') === name);
+            });
+            if (!_cyInstance) return;
+            const layout = _cyInstance.layout(_cyGetLayoutConfig(name));
+            layout.run();
+        }
+
+        // ── Export ──
+        function _topoExport(format) {
+            if (!_cyInstance) return;
+            let dataUrl, filename, isBlob = false;
+            if (format === 'svg' && typeof _cyInstance.svg === 'function') {
+                const svgContent = _cyInstance.svg({ full: true, bg: '#0d0f0a' });
+                const blob = new Blob([svgContent], { type: 'image/svg+xml' });
+                dataUrl = URL.createObjectURL(blob);
+                filename = 'mass-topology.svg';
+                isBlob = true;
+            } else {
+                dataUrl = _cyInstance.png({ full: true, bg: '#0d0f0a', scale: 2 });
+                filename = 'mass-topology.png';
+            }
+            const a = document.createElement('a');
+            a.href = dataUrl;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            if (isBlob) URL.revokeObjectURL(dataUrl);
+        }
+
+        // ── Risk heatmap mode ──
+        function _topoToggleHeatmap() {
+            _topoHeatmapActive = !_topoHeatmapActive;
+            const btn = document.getElementById('topoHeatmapBtn');
+            if (btn) btn.classList.toggle('active', _topoHeatmapActive);
+
+            if (!_cyInstance || !_topoRendered) return;
+
+            if (_topoHeatmapActive) {
+                // Scale node size by threat count, add severity color gradient
+                for (const nd of _topoNodeMap) {
+                    const cyNode = _cyInstance.getElementById(nd.mId);
+                    if (!cyNode || cyNode.empty()) continue;
+                    const tc = nd.threatCount || 0;
+                    const scale = Math.max(1, 1 + (tc * 0.3));
+                    cyNode.style({
+                        'width': 90 * scale,
+                        'height': 36 * scale,
+                    });
+                }
+            } else {
+                // Reset to default sizes
+                for (const nd of _topoNodeMap) {
+                    const cyNode = _cyInstance.getElementById(nd.mId);
+                    if (!cyNode || cyNode.empty()) continue;
+                    cyNode.style({ 'width': 90, 'height': 36 });
+                }
+            }
+
+            // Re-fit after size changes
+            _cyInstance.animate({ fit: { padding: 20 } }, { duration: 300 });
         }
 
         function _renderThreatTable(model, strideFilter) {
@@ -13090,7 +13645,10 @@
                 jailbreak: 'E', excessive_agency: 'E', tool_abuse: 'E',
             };
 
-            tbody.innerHTML = threats.map(t => {
+            // Store threats for attack path highlighting
+            const _threatTableRows = threats;
+
+            tbody.innerHTML = threats.map((t, idx) => {
                 const sc = t.stride_category || '';
                 const pillarLetter = stridePillarLabels[sc] || '?';
                 const catLabel = sc.replace(/_/g, ' ');
@@ -13103,7 +13661,7 @@
                 if (t.mitre_atlas_ids && t.mitre_atlas_ids.length) tags.push(...t.mitre_atlas_ids.map(id => `<span class="badge" style="font-size:0.5rem;background:var(--toxic-dim);color:var(--toxic);padding:1px 3px;">${escapeHtml(id)}</span>`));
                 if (t.cwe_ids && t.cwe_ids.length) tags.push(...t.cwe_ids.map(id => `<span class="badge" style="font-size:0.5rem;background:var(--amber-dim);color:var(--amber);padding:1px 3px;">${escapeHtml(id)}</span>`));
 
-                return `<tr>
+                return `<tr style="cursor:pointer;" onclick="_topoHighlightThreat(_threatTableThreats[${idx}])">
                     <td style="padding:0.375rem;"><span class="badge" style="font-size:0.5625rem;background:var(--bg-tertiary);color:var(--text-secondary);width:18px;display:inline-block;text-align:center;" title="${escapeHtml(catLabel)}">${pillarLetter}</span></td>
                     <td style="padding:0.375rem;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(t.title || '')}">${escapeHtml(t.title || '')}</td>
                     <td style="padding:0.375rem;"><span style="color:${sevColors[sev] || 'var(--text-muted)'};font-weight:600;text-transform:uppercase;font-size:0.5625rem;">${sev}</span></td>
@@ -13112,6 +13670,9 @@
                     <td style="padding:0.375rem;display:flex;flex-wrap:wrap;gap:2px;">${tags.join('')}</td>
                 </tr>`;
             }).join('');
+
+            // Store threats globally for row click handlers
+            window._threatTableThreats = _threatTableRows;
         }
 
         function _renderComplianceSummary(model) {
@@ -15332,6 +15893,18 @@
             }
         }
 
+        function toggleSystemDirs() {
+            const section = document.getElementById('systemDirsSection');
+            const toggle = document.getElementById('systemDirsToggle');
+            if (section.style.display === 'none') {
+                section.style.display = 'block';
+                toggle.textContent = '[-] collapse';
+            } else {
+                section.style.display = 'none';
+                toggle.textContent = '[+] expand';
+            }
+        }
+
         function onActivityProviderChange(activityId) {
             const provEl = document.getElementById(_activityElId(activityId, 'provider'));
             const modelEl = document.getElementById(_activityElId(activityId, 'model'));
@@ -15449,6 +16022,20 @@
                 }
                 // Load per-activity model overrides
                 _loadActivityOverridesFromResponse(data);
+                // Load system directory paths
+                const _dirFields = [
+                    ['settingsTargetsDir', 'targets_dir'],
+                    ['settingsDownloadsDir', 'downloads_dir'],
+                    ['settingsGithubClonesDir', 'github_clones_dir'],
+                    ['settingsStrategiesDir', 'strategies_dir'],
+                    ['settingsReportsDir', 'reports_dir'],
+                    ['settingsSandboxScenariosDir', 'sandbox_scenarios_dir'],
+                    ['settingsGuardrailsExportDir', 'guardrails_export_dir'],
+                ];
+                _dirFields.forEach(function(pair) {
+                    const el = document.getElementById(pair[0]);
+                    if (el && data[pair[1]]) el.value = data[pair[1]];
+                });
             } catch (e) {
                 // Non-critical — defaults will use server .env values
             }
@@ -15489,6 +16076,20 @@
                 document.getElementById('activityOverrideRows').innerHTML.trim()) {
                 payload.activity_overrides = _collectActivityOverrides();
             }
+            // Include system directory paths (only send non-empty values)
+            const _dirSaveFields = [
+                ['settingsTargetsDir', 'targets_dir'],
+                ['settingsDownloadsDir', 'downloads_dir'],
+                ['settingsGithubClonesDir', 'github_clones_dir'],
+                ['settingsStrategiesDir', 'strategies_dir'],
+                ['settingsReportsDir', 'reports_dir'],
+                ['settingsSandboxScenariosDir', 'sandbox_scenarios_dir'],
+                ['settingsGuardrailsExportDir', 'guardrails_export_dir'],
+            ];
+            _dirSaveFields.forEach(function(pair) {
+                const el = document.getElementById(pair[0]);
+                if (el && el.value.trim()) payload[pair[1]] = el.value.trim();
+            });
             try {
                 await apiFetch('/api/v1/settings/platform-defaults', {
                     method: 'PUT',
@@ -21097,7 +21698,8 @@ strategies:
             }
 
             grid.innerHTML = items.map((t, i) => {
-                const sourceLabel = t.source === 'github' ? 'GitHub' : t.source === 'remote' ? 'Remote' : 'Local';
+                const _srcLabels = { github: 'GitHub', remote: 'Remote', s3: 'AWS S3', azure_blob: 'Azure', gcs: 'GCS', host_import: 'Host', git_remote: 'Git', http_archive: 'HTTP' };
+                const sourceLabel = _srcLabels[t.source] || 'Local';
                 const typeLabel = (t.target_type || 'deployment').replace(/_/g, ' ');
 
                 let statsHtml = '';
@@ -21128,6 +21730,7 @@ strategies:
                             </div>
                         </div>
                         ${renderStageProgress(t.status)}
+                        ${t.fetch_status && t.fetch_status !== 'ready' ? `<div style="font-size:0.6875rem;margin-bottom:0.25rem;"><span class="badge ${t.fetch_status === 'failed' ? 'badge-error' : 'badge-warning'}">${t.fetch_status === 'pending' ? 'Import pending' : t.fetch_status === 'fetching' ? 'Downloading...' : 'Import failed'}</span></div>` : ''}
                         ${t.pipeline_status && t.pipeline_status !== 'complete' && t.pipeline_status !== 'error' ? `<div class="pipeline-indicator"><div class="pipeline-dot"></div>${escapeHtml(t.pipeline_status)}...</div>` : ''}
                         ${t.pipeline_status === 'error' ? `<div style="font-size:0.6875rem;color:var(--critical);">Pipeline error</div>` : ''}
                         ${pathDisplay ? `<div class="mono text-muted" style="font-size:0.6875rem;margin-bottom:0.375rem;">${pathDisplay}</div>` : ''}
@@ -21210,6 +21813,57 @@ strategies:
                 const el = document.getElementById(id);
                 if (el) el.classList.toggle('active', id === tabMap[sourceType]);
             });
+            // Load cloud accounts when switching to cloud tabs
+            if (['s3', 'azure', 'gcs'].includes(sourceType)) {
+                _loadCloudAccountsForTab(sourceType);
+            }
+        }
+
+        let _cloudAccountsCache = null;
+        async function _loadCloudAccountsForTab(sourceType) {
+            const providerMap = { s3: 'aws', azure: 'azure', gcs: 'gcp' };
+            const selectMap = { s3: 'addTargetS3Account', azure: 'addTargetAzureAccount', gcs: 'addTargetGcsAccount' };
+            const selectEl = document.getElementById(selectMap[sourceType]);
+            if (!selectEl) return;
+            try {
+                if (!_cloudAccountsCache) {
+                    const resp = await apiFetch('/api/v1/cloud/accounts?limit=100');
+                    _cloudAccountsCache = resp.items || [];
+                }
+                const provider = providerMap[sourceType];
+                const matching = _cloudAccountsCache.filter(a => a.provider === provider);
+                selectEl.innerHTML = '<option value="">None (use environment credentials)</option>';
+                matching.forEach(a => {
+                    const opt = document.createElement('option');
+                    opt.value = a.id;
+                    opt.textContent = `${a.name}${a.has_credentials ? '' : ' (no creds)'}`;
+                    selectEl.appendChild(opt);
+                });
+                if (!matching.length) {
+                    const opt = document.createElement('option');
+                    opt.value = '';
+                    opt.disabled = true;
+                    opt.textContent = 'No ' + provider.toUpperCase() + ' accounts registered \u2014 add one in Cloud settings';
+                    selectEl.appendChild(opt);
+                }
+            } catch (e) {
+                // Silently fail — environment credentials still work
+            }
+        }
+
+        async function importCloudResourceAsTarget(resourceId, resourceName) {
+            if (!confirm(`Import "${resourceName}" as a scan target? Files will be downloaded in the background.`)) return;
+            try {
+                const result = await apiFetch(`/api/v1/cloud/resources/${resourceId}/import-as-target`, {
+                    method: 'POST',
+                    body: JSON.stringify({ auto_scan: false }),
+                });
+                showToast(`Importing "${resourceName}" \u2014 downloading in background`, 'info');
+                _targetsLastHash = '';
+                loadTargetsInventory();
+            } catch (e) {
+                showToast('Import failed: ' + e.message, 'error');
+            }
         }
 
         function autoFillTargetName() {
@@ -21457,6 +22111,7 @@ strategies:
         function resetAddTargetWizard() {
             _addTargetSelectedType = null;
             _addTargetActiveSource = 'local';
+            _cloudAccountsCache = null;
             addTargetGoToPanel(1);
             document.querySelectorAll('#addTargetPanel1 .target-type-card').forEach(c => c.classList.remove('selected'));
             const inputIds = [
@@ -21472,7 +22127,8 @@ strategies:
             ];
             inputIds.forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
             ['addTargetProvider', 'addTargetAgentProtocol', 'addTargetAgentAuth',
-             'addTargetScanProfile', 'addTargetAttackPreset'].forEach(id => {
+             'addTargetScanProfile', 'addTargetAttackPreset',
+             'addTargetS3Account', 'addTargetAzureAccount', 'addTargetGcsAccount'].forEach(id => {
                 const el = document.getElementById(id); if (el) el.selectedIndex = 0;
             });
             const autoDiscover = document.getElementById('addTargetAutoDiscover');
@@ -21521,15 +22177,26 @@ strategies:
             // Source path from active source tab
             if (meta.hasSource) {
                 let sourcePath = '';
+                let cloudAccountId = null;
                 switch (_addTargetActiveSource) {
                     case 'local': sourcePath = document.getElementById('addTargetSourcePath')?.value.trim() || ''; break;
                     case 'github': sourcePath = document.getElementById('addTargetGithubUrl')?.value.trim() || '';
                         body.source_ref = document.getElementById('addTargetSourceRef')?.value.trim() || null; break;
-                    case 's3': sourcePath = document.getElementById('addTargetS3Uri')?.value.trim() || ''; break;
-                    case 'azure': sourcePath = document.getElementById('addTargetAzureUrl')?.value.trim() || ''; break;
-                    case 'gcs': sourcePath = document.getElementById('addTargetGcsUri')?.value.trim() || ''; break;
+                    case 's3':
+                        sourcePath = document.getElementById('addTargetS3Uri')?.value.trim() || '';
+                        cloudAccountId = document.getElementById('addTargetS3Account')?.value || null;
+                        break;
+                    case 'azure':
+                        sourcePath = document.getElementById('addTargetAzureUrl')?.value.trim() || '';
+                        cloudAccountId = document.getElementById('addTargetAzureAccount')?.value || null;
+                        break;
+                    case 'gcs':
+                        sourcePath = document.getElementById('addTargetGcsUri')?.value.trim() || '';
+                        cloudAccountId = document.getElementById('addTargetGcsAccount')?.value || null;
+                        break;
                 }
                 if (sourcePath) body.source_path = sourcePath;
+                if (cloudAccountId) body.cloud_account_id = cloudAccountId;
                 body.auto_discover = document.getElementById('addTargetAutoDiscover')?.checked || false;
                 // Auto-pipeline (Iteration 26)
                 if (document.getElementById('addTargetAutoPipeline')?.checked) {
@@ -21618,7 +22285,12 @@ strategies:
                     body: JSON.stringify(body),
                 });
                 hideModal('addTargetModal');
-                showToast(`Project added: ${name}`, 'success');
+                const isRemote = result && result.fetch_status === 'pending';
+                if (isRemote) {
+                    showToast(`Importing "${name}" \u2014 downloading in background`, 'info');
+                } else {
+                    showToast(`Project added: ${name}`, 'success');
+                }
                 addXp(50);
 
                 // Store attack payloads for this target if provided
@@ -23780,11 +24452,16 @@ strategies:
 
                 // Info section
                 const infoEl = document.getElementById('targetDetailInfo');
+                const _fetchBadge = detail.fetch_status
+                    ? `<span class="badge ${detail.fetch_status === 'ready' ? 'badge-success' : detail.fetch_status === 'failed' ? 'badge-error' : 'badge-warning'}">${escapeHtml(detail.fetch_status)}</span>`
+                    : '';
                 infoEl.innerHTML = `
                     <div class="detail-field"><span class="detail-field-label">Type</span><span class="detail-field-value">${escapeHtml((detail.target_type || '').replace(/_/g, ' '))}</span></div>
                     <div class="detail-field"><span class="detail-field-label">Status</span><span class="detail-field-value"><span class="badge status-${detail.status}">${detail.status}</span></span></div>
                     <div class="detail-field"><span class="detail-field-label">Source</span><span class="detail-field-value">${escapeHtml(detail.source)}</span></div>
+                    ${detail.source_url ? `<div class="detail-field"><span class="detail-field-label">Source URL</span><span class="detail-field-value mono" style="font-size:0.75rem;">${escapeHtml(detail.source_url)}</span></div>` : ''}
                     ${detail.source_path ? `<div class="detail-field"><span class="detail-field-label">Path</span><span class="detail-field-value">${escapeHtml(detail.source_path)}</span></div>` : ''}
+                    ${_fetchBadge ? `<div class="detail-field"><span class="detail-field-label">Import</span><span class="detail-field-value">${_fetchBadge}${detail.fetch_error ? ` <span class="text-muted" style="font-size:0.6875rem;">${escapeHtml(detail.fetch_error)}</span>` : ''}</span></div>` : ''}
                     ${detail.description ? `<div class="detail-field"><span class="detail-field-label">Description</span><span class="detail-field-value">${escapeHtml(detail.description)}</span></div>` : ''}
                     ${detail.tags ? `<div class="detail-field"><span class="detail-field-label">Tags</span><span class="detail-field-value">${detail.tags.map(t => `<span class="badge badge-info" style="margin:0.125rem;">${escapeHtml(t)}</span>`).join(' ')}</span></div>` : ''}
                     ${detail.model_endpoint ? `<div class="detail-field"><span class="detail-field-label">Endpoint</span><span class="detail-field-value">${escapeHtml(detail.model_endpoint)}</span></div>` : ''}
@@ -24027,6 +24704,9 @@ strategies:
                         } else if (resultsBadge) {
                             resultsBadge.classList.remove('visible');
                         }
+
+                        // Cache threat model for STRIDE → topology highlight integration
+                        _lastThreatModel = fetchedThreatModel;
 
                         // Render topology (needs threat model data for merge)
                         try {
