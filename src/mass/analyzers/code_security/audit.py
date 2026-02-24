@@ -63,6 +63,66 @@ _SEV_ORDER = {
 class CodeSecurityAuditor:
     """Orchestrates the two-phase code security audit."""
 
+    def audit_sync(
+        self,
+        directory: Path | str,
+        architecture_map: dict[str, Any] | None = None,
+        config: AuditConfig | None = None,
+        progress_cb: Callable[[str, int, int], None] | None = None,
+    ) -> AuditResult:
+        """Synchronous audit entry point (no LLM verification).
+
+        Use this when calling from a sync context. If LLM verification
+        is enabled in config, it will be run via asyncio.run().
+        """
+        import asyncio
+
+        cfg = config or AuditConfig()
+        if not cfg.llm_verification:
+            # Pure static — run everything synchronously
+            return self._audit_static(directory, architecture_map, cfg, progress_cb)
+        else:
+            return asyncio.run(self.audit(directory, architecture_map, config, progress_cb))
+
+    def _audit_static(
+        self,
+        directory: Path | str,
+        architecture_map: dict[str, Any] | None = None,
+        config: AuditConfig | None = None,
+        progress_cb: Callable[[str, int, int], None] | None = None,
+    ) -> AuditResult:
+        """Phase A only: synchronous static scan without LLM verification."""
+        cfg = config or AuditConfig()
+        directory = Path(directory)
+        result = AuditResult()
+
+        t0 = time.monotonic()
+        try:
+            scanner = CodeSecurityScanner(architecture_map=architecture_map)
+            candidates = scanner.scan_directory(directory)
+            result.candidates_found = len(candidates)
+            if progress_cb:
+                progress_cb("static_scan", len(candidates), len(candidates))
+        except Exception as e:
+            logger.error("Phase A (static scan) failed: %s", e)
+            result.errors.append(f"Static scan error: {e}")
+            result.duration_phase_a = time.monotonic() - t0
+            return result
+
+        result.duration_phase_a = time.monotonic() - t0
+        logger.info(
+            "Phase A complete: %d candidates in %.1fs",
+            len(candidates), result.duration_phase_a,
+        )
+
+        for c in candidates:
+            confidence = 0.5 if not c.requires_llm_verification else 0.4
+            finding = self._candidate_to_finding(c, confidence=confidence)
+            result.findings.append(finding)
+            result.findings_static_only += 1
+
+        return result
+
     async def audit(
         self,
         directory: Path | str,

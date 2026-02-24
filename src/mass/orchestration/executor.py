@@ -2179,7 +2179,6 @@ class JobExecutor:
         Runs Phase A (static grep) and optionally Phase B (LLM verification)
         to find application security vulnerabilities in code.
         """
-        import asyncio
         from pathlib import Path as PathLib
         from mass.analyzers.code_security.audit import AuditConfig, CodeSecurityAuditor
         from mass.core.types import Severity as SevEnum
@@ -2222,32 +2221,11 @@ class JobExecutor:
 
             auditor = CodeSecurityAuditor()
 
-            # Run async audit in sync handler
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                loop = None
-
-            if loop and loop.is_running():
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as pool:
-                    audit_result = pool.submit(
-                        lambda: asyncio.run(
-                            auditor.audit(
-                                PathLib(path),
-                                architecture_map=architecture_map,
-                                config=config,
-                            )
-                        )
-                    ).result()
-            else:
-                audit_result = asyncio.run(
-                    auditor.audit(
-                        PathLib(path),
-                        architecture_map=architecture_map,
-                        config=config,
-                    )
-                )
+            audit_result = auditor.audit_sync(
+                PathLib(path),
+                architecture_map=architecture_map,
+                config=config,
+            )
 
             # Add findings to result
             for finding in audit_result.findings:

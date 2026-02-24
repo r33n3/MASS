@@ -38,11 +38,16 @@ SKIP_DIRECTORIES = {
     ".git", ".svn", ".hg",
     "__pycache__", ".pytest_cache", ".mypy_cache",
     "node_modules", ".npm",
-    "venv", ".venv", "env",
+    "venv", ".venv", "env", ".env",
     ".tox", ".nox",
     "dist", "build", "target",
     "coverage", ".coverage",
-    ".eggs", "*.egg-info",
+    ".eggs",
+    # Vendored/bundled Python installations and site-packages
+    "site-packages", "Lib", "lib", "Scripts", "Include",
+    # Common vendored dependency directories
+    "vendor", "vendors", "third_party", "third-party",
+    "external", "deps",
 }
 
 SKIP_FILES = {
@@ -274,7 +279,12 @@ class CodeSecurityScanner:
             name = entry.name
 
             if entry.is_dir():
-                if name in SKIP_DIRECTORIES or name.endswith(".egg-info"):
+                if name in SKIP_DIRECTORIES:
+                    continue
+                if name.endswith(".egg-info") or name.endswith(".dist-info"):
+                    continue
+                # Skip directories that look like bundled Python runtimes
+                if name.startswith("python") or name.startswith("Python"):
                     continue
                 self._walk(entry, out)
             elif entry.is_file():
