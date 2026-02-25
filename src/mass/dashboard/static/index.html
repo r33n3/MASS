@@ -5695,6 +5695,127 @@
             background: linear-gradient(135deg, transparent 40%, var(--border) 40%, var(--border) 50%, transparent 50%, transparent 70%, var(--border) 70%, var(--border) 80%, transparent 80%);
             border-radius: 0 0 6px 0;
         }
+
+        /* ── Flow Visualization (Sankey-style) ── */
+        .flow-tab-bar {
+            display: flex; align-items: center; gap: 0.25rem;
+            margin-right: auto;
+        }
+        .flow-tab {
+            font-size: 0.625rem; font-weight: 600; font-family: var(--font-mono);
+            padding: 0.2rem 0.5rem; border-radius: 3px; cursor: pointer;
+            border: 1px solid var(--border); background: var(--bg-tertiary); color: var(--text-muted);
+            transition: all 0.15s;
+        }
+        .flow-tab.active {
+            background: var(--toxic-dim); border-color: var(--toxic); color: var(--toxic);
+        }
+        .flow-tab-dot {
+            display: inline-block; width: 5px; height: 5px; border-radius: 50%;
+            background: var(--toxic); margin-left: 3px; vertical-align: middle;
+        }
+        .flow-vis-container {
+            position: relative; width: 100%; min-height: 180px; overflow: hidden;
+        }
+        .flow-columns {
+            display: flex; width: 100%; min-height: 180px; position: relative; z-index: 1;
+        }
+        .flow-column {
+            flex: 0 0 180px; display: flex; flex-direction: column; gap: 0.25rem;
+            padding: 0.375rem; z-index: 2;
+        }
+        .flow-column.col-src { align-items: flex-end; }
+        .flow-column.col-dst { align-items: flex-start; }
+        .flow-svg-spacer { flex: 1; min-width: 60px; }
+        .flow-column-header {
+            font-size: 0.5625rem; font-weight: 600; color: var(--text-muted);
+            font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.05em;
+            padding: 0.125rem 0.25rem; margin-bottom: 0.125rem;
+        }
+        .flow-zone-group {
+            border-radius: 4px; padding: 0.25rem; margin-bottom: 0.25rem;
+        }
+        .flow-zone-label {
+            font-size: 0.5rem; font-weight: 600; color: var(--text-muted);
+            font-family: var(--font-mono); padding: 0 0.125rem 0.125rem; opacity: 0.7;
+        }
+        .flow-node-card {
+            padding: 0.3rem 0.5rem; border-radius: 4px; cursor: pointer;
+            border: 1px solid var(--border); background: var(--bg-deep);
+            font-size: 0.625rem; font-family: var(--font-mono); color: var(--text-secondary);
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 170px;
+            transition: all 0.2s; position: relative;
+        }
+        .flow-node-card:hover {
+            border-color: var(--text-muted); background: var(--bg-tertiary);
+            box-shadow: 0 0 6px rgba(127,255,0,0.1);
+        }
+        .flow-node-card.active {
+            border-color: var(--toxic); background: var(--toxic-dim);
+            color: var(--toxic); box-shadow: 0 0 10px rgba(127,255,0,0.2);
+        }
+        .flow-node-card.dimmed { opacity: 0.15; pointer-events: none; }
+        .flow-node-card .card-type-dot {
+            display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+            margin-right: 4px; vertical-align: middle; flex-shrink: 0;
+        }
+        .flow-node-card .card-threat-count {
+            font-size: 0.5rem; color: var(--critical); margin-left: 4px; font-weight: 600;
+        }
+        .flow-svg-overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none; z-index: 1;
+        }
+        .flow-svg-overlay path { pointer-events: stroke; }
+        .conn-glow {
+            fill: none; stroke-width: 14; opacity: 0; filter: url(#flowGlow);
+            transition: opacity 0.3s;
+        }
+        .conn-line {
+            fill: none; stroke-width: 2.5; opacity: 0.4;
+            transition: all 0.3s;
+        }
+        .conn-line.crossing { stroke-dasharray: 6,4; }
+        .conn-flow {
+            fill: none; stroke: rgba(255,255,255,0.7); stroke-width: 2;
+            stroke-dasharray: 4,8; opacity: 0;
+            transition: opacity 0.3s;
+        }
+        .conn-group:hover .conn-line { opacity: 0.7; stroke-width: 3.5; cursor: pointer; }
+        .conn-group.highlight .conn-glow { opacity: 0.5; animation: glowPulse 2s ease-in-out infinite; }
+        .conn-group.highlight .conn-line { opacity: 1; stroke-width: 3.5; }
+        .conn-group.highlight .conn-flow { opacity: 1; animation: flowDash 1s linear infinite; }
+        .conn-group.dimmed .conn-line { opacity: 0.08; }
+        .conn-group.dimmed .conn-glow, .conn-group.dimmed .conn-flow { opacity: 0; }
+        .conn-group .conn-crossing-warn {
+            font-size: 8px; fill: var(--amber); opacity: 0; transition: opacity 0.3s;
+        }
+        .conn-group.highlight .conn-crossing-warn { opacity: 1; }
+        .trust-boundary-divider {
+            stroke: var(--border); stroke-width: 1; stroke-dasharray: 4,3; opacity: 0.5;
+        }
+        .trust-boundary-label {
+            font-size: 8px; fill: var(--text-muted); font-family: var(--font-mono);
+        }
+        .flow-tooltip {
+            position: fixed; z-index: 10000; pointer-events: none;
+            background: var(--bg-void); border: 1px solid var(--border);
+            border-radius: var(--radius); padding: 0.375rem 0.625rem;
+            font-size: 0.625rem; color: var(--text-secondary);
+            font-family: var(--font-mono); max-width: 280px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.4); display: none;
+        }
+        @keyframes flowDash {
+            to { stroke-dashoffset: -24; }
+        }
+        @keyframes glowPulse {
+            0%, 100% { opacity: 0.3; }
+            50% { opacity: 0.6; }
+        }
+        /* Spatial view controls - hidden when flow active */
+        .topo-spatial-controls { display: none; }
+        .topo-spatial-controls.visible { display: flex; }
+
         #unifiedTopologyGraph svg {
             width: 100%;
             height: auto;
@@ -9701,29 +9822,26 @@
                             <div class="scan-type-selector" id="scanTypeSelector">
                                 <div class="scan-type-card" data-profile="quick" onclick="selectScanType('quick')">
                                     <div class="st-name">Quick</div>
-                                    <div class="st-desc">Fast scan with essential security probes</div>
+                                    <div class="st-desc">Fast assessment &mdash; static analyzers only</div>
                                     <div class="st-details">
-                                        <span>Probes: injection, prompt leak</span>
-                                        <span>Detectors: keyword, refusal</span>
-                                        <span>~10 prompts per probe</span>
+                                        <span>Analyzers: deployment, secrets, model files, context, code security (static)</span>
+                                        <span>No model interrogation &middot; ~2 min</span>
                                     </div>
                                 </div>
                                 <div class="scan-type-card selected" data-profile="standard" onclick="selectScanType('standard')">
                                     <div class="st-name">Standard</div>
-                                    <div class="st-desc">Balanced scan with common vulnerability checks</div>
+                                    <div class="st-desc">Full static analysis + LLM code verification</div>
                                     <div class="st-details">
-                                        <span>Probes: injection, jailbreak, prompt leak</span>
-                                        <span>Detectors: keyword, refusal, toxicity, LLM judge</span>
-                                        <span>~50 prompts per probe</span>
+                                        <span>Analyzers: all 10 static analyzers + code security (LLM-verified, high+)</span>
+                                        <span>No model interrogation &middot; ~5 min</span>
                                     </div>
                                 </div>
                                 <div class="scan-type-card" data-profile="comprehensive" onclick="selectScanType('comprehensive')">
                                     <div class="st-name">Comprehensive</div>
-                                    <div class="st-desc">Thorough scan with all available probes and detectors</div>
+                                    <div class="st-desc">Complete assessment with model interrogation</div>
                                     <div class="st-details">
-                                        <span>Probes: all available</span>
-                                        <span>Detectors: all available</span>
-                                        <span>~100 prompts per probe</span>
+                                        <span>Analyzers: all static + code security (LLM-verified, medium+)</span>
+                                        <span>Interrogation: injection, jailbreak, data exfil &middot; ~15 min</span>
                                     </div>
                                 </div>
                             </div>
@@ -9898,7 +10016,11 @@
                                     <div class="tm-topo-header">
                                         <span style="font-size:0.6875rem;font-weight:600;color:var(--text-secondary);font-family:var(--font-mono);">/// Topology</span>
                                         <div class="topo-legend-inline">
-                                            <div class="topo-controls-bar">
+                                            <div class="flow-tab-bar">
+                                                <button class="flow-tab active" onclick="_switchTopoView('flow')" data-view="flow">Flow<span class="flow-tab-dot"></span></button>
+                                                <button class="flow-tab" onclick="_switchTopoView('spatial')" data-view="spatial">Spatial</button>
+                                            </div>
+                                            <div class="topo-controls-bar topo-spatial-controls" id="topoSpatialControls">
                                                 <button class="topo-fit-btn" onclick="_topoFitView()" title="Fit to panel">&#x2922;</button>
                                                 <button class="topo-ctrl-btn active" onclick="_topoSetLayout('dagre')" data-layout="dagre" title="Hierarchical layout">Dagre</button>
                                                 <button class="topo-ctrl-btn" onclick="_topoSetLayout('cose-bilkent')" data-layout="cose-bilkent" title="Force-directed layout">Force</button>
@@ -9916,11 +10038,12 @@
                                             <span class="badge topo-legend-badge" style="--lc:#c45c3a;">Tool</span>
                                         </div>
                                     </div>
-                                    <div id="unifiedTopologyGraph" style="padding:0.5rem;"></div>
+                                    <div id="flowVisualization" class="flow-vis-container"></div>
+                                    <div id="unifiedTopologyGraph" style="padding:0.5rem;display:none;"></div>
                                 </div>
                             </div>
 
-                            <!-- Component Flow (Mermaid.js) -->
+                            <!-- Component Flow (unified into flow view) -->
                             <div id="tmComponentFlow" style="display:none;"></div>
 
                             <!-- STRIDE Filter Pills + Threat Table -->
@@ -11683,7 +11806,7 @@
                 status: data.status,
                 progress: data.progress,
                 findings_count: data.findings_count,
-                message: data.current_phase || data.message,
+                message: formatPhaseName(data.current_phase) || data.message,
             });
 
             // Update target detail progress bar if visible
@@ -11697,7 +11820,7 @@
                 const jobsEl = document.getElementById('targetScanJobsCount');
                 if (barEl) barEl.style.width = pct + '%';
                 if (pctEl) pctEl.textContent = pct + '%';
-                if (phaseEl) phaseEl.textContent = data.current_phase || data.message || 'Running...';
+                if (phaseEl) phaseEl.textContent = formatPhaseName(data.current_phase) || data.message || 'Running...';
                 if (findEl) findEl.textContent = (data.findings_count || 0) + ' findings';
                 if (jobsEl && data.jobs_completed != null && data.jobs_total) {
                     jobsEl.textContent = data.jobs_completed + '/' + data.jobs_total + ' jobs';
@@ -12870,8 +12993,662 @@
             });
             // Re-render threat table with filter
             if (_strideLastModel) _renderThreatTable(_strideLastModel, filter);
-            // Highlight affected nodes on topology graph
-            _topoHighlightStride(filter);
+            // Highlight affected nodes on active view
+            if (_activeTopoView === 'flow') {
+                _flowHighlightStride(filter);
+            } else {
+                _topoHighlightStride(filter);
+            }
+        }
+
+        // ── Sankey-style Flow Visualization ──
+        // Column-based flow diagram with SVG bezier connections, animated particles, and interactive highlighting
+
+        let _flowRendered = false;
+        let _flowNodeCards = {};   // nodeId → { srcEl, dstEl }
+        let _flowConnections = []; // [{ group, srcId, dstId, edge }]
+        let _flowTooltipEl = null;
+        let _flowLastRenderData = null;
+        let _activeTopoView = 'flow'; // 'flow' | 'spatial'
+        let _spatialLazyLoaded = false;
+
+        // Classification → color (shared with Cytoscape)
+        const _flowClassColors = {
+            'public': '#5d8a4a',
+            'internal': '#d4a03a',
+            'confidential': '#e07850',
+            'restricted': '#e74c3c',
+        };
+
+        // Trust boundary level → zone color
+        const _flowZoneColors = {
+            'trusted':      { bg: 'rgba(93,138,74,0.08)',  border: 'rgba(93,138,74,0.30)' },
+            'internal':     { bg: 'rgba(93,138,74,0.08)',  border: 'rgba(93,138,74,0.30)' },
+            'semi-trusted': { bg: 'rgba(212,160,58,0.08)', border: 'rgba(212,160,58,0.30)' },
+            'semi_trusted': { bg: 'rgba(212,160,58,0.08)', border: 'rgba(212,160,58,0.30)' },
+            'external':     { bg: 'rgba(224,120,80,0.08)', border: 'rgba(224,120,80,0.30)' },
+            'untrusted':    { bg: 'rgba(231,76,60,0.08)',  border: 'rgba(231,76,60,0.30)' },
+        };
+        const _flowZoneColorArr = [
+            { bg: 'rgba(93,138,74,0.08)',  border: 'rgba(93,138,74,0.30)' },
+            { bg: 'rgba(212,160,58,0.08)', border: 'rgba(212,160,58,0.30)' },
+            { bg: 'rgba(224,120,80,0.08)', border: 'rgba(224,120,80,0.30)' },
+            { bg: 'rgba(231,76,60,0.08)',  border: 'rgba(231,76,60,0.30)' },
+        ];
+
+        // Node type → dot color
+        const _flowNodeColors = {
+            'ai_agent': '#7FFF00', 'agent': '#7FFF00',
+            'model_provider': '#9ACD32',
+            'mcp_server': '#e07850', 'router': '#e07850',
+            'tool': '#c45c3a',
+            'database': '#d4a03a', 'vector_store': '#d4a03a', 'memory': '#a8a498',
+            'cloud_service': '#5d8a4a', 'api_service': '#8a9d68',
+            'trigger': '#6b6a60',
+        };
+
+        const _srcPreferTypes = new Set(['trigger', 'api_service', 'cloud_service']);
+        const _dstPreferTypes = new Set(['tool', 'database', 'vector_store', 'memory']);
+
+        function _flowEnsureTooltip() {
+            if (_flowTooltipEl) return _flowTooltipEl;
+            _flowTooltipEl = document.createElement('div');
+            _flowTooltipEl.className = 'flow-tooltip';
+            document.body.appendChild(_flowTooltipEl);
+            return _flowTooltipEl;
+        }
+
+        function _flowShowTooltip(evt, html) {
+            const tip = _flowEnsureTooltip();
+            tip.innerHTML = html;
+            tip.style.display = 'block';
+            tip.style.left = (evt.clientX + 12) + 'px';
+            tip.style.top = (evt.clientY - 8) + 'px';
+        }
+
+        function _flowHideTooltip() {
+            if (_flowTooltipEl) _flowTooltipEl.style.display = 'none';
+        }
+
+        function _renderFlowVisualization(detail, threatModel) {
+            const container = document.getElementById('flowVisualization');
+            if (!container) return;
+
+            const topoCol = container.closest('.tm-topo-col');
+            _flowRendered = false;
+            _flowNodeCards = {};
+            _flowConnections = [];
+
+            const topology = detail.topology || {};
+            const topoNodes = topology.nodes || [];
+            const topoEdges = topology.edges || [];
+            const tm = threatModel || {};
+            const assets = tm.assets || [];
+            const dataFlows = tm.data_flows || [];
+            const boundaries = tm.trust_boundaries || [];
+            const threats = tm.threats || [];
+            const archMap = detail.architecture_map || {};
+
+            // ── Collect threatened nodes ──
+            const threatenedNodes = new Set();
+            const nodeThreats = {};
+            for (const t of threats) {
+                for (const comp of (t.affected_components || [])) {
+                    threatenedNodes.add(comp);
+                    if (!nodeThreats[comp]) nodeThreats[comp] = [];
+                    nodeThreats[comp].push(t);
+                }
+            }
+
+            // ── Map nodes to trust boundary zones ──
+            const nodeToZone = {};
+            const zoneInfo = {};
+            for (const tb of boundaries) {
+                zoneInfo[tb.id] = tb;
+                for (const nid of (tb.components_inside || [])) nodeToZone[nid] = tb.id;
+            }
+
+            // ── Crossing edges ──
+            const crossingEdgeSet = new Set();
+            for (const tb of boundaries) {
+                for (const eid of (tb.crossing_edges || [])) crossingEdgeSet.add(eid);
+            }
+
+            // ── Build unified node list (same dedup as _renderTopology) ──
+            function sanitize(str) {
+                return (str || '').replace(/["'`<>{}|\\\[\]\(\)\/:#&;\u2192\u2190\u2194]/g, '').replace(/\n/g, ' ').trim().substring(0, 30).replace(/[-_.,\s]+$/, '') || 'node';
+            }
+
+            const seenNodes = new Set();
+            const allNodes = [];
+            const nodeById = {};
+
+            function addNode(origId, nodeType, label) {
+                if (seenNodes.has(origId)) return;
+                seenNodes.add(origId);
+                const nd = {
+                    id: origId, type: nodeType,
+                    label: sanitize(label || origId),
+                    zone: nodeToZone[origId] || null,
+                    hasThreat: threatenedNodes.has(origId),
+                    threatCount: (nodeThreats[origId] || []).length,
+                    inDeg: 0, outDeg: 0,
+                };
+                allNodes.push(nd);
+                nodeById[origId] = nd;
+            }
+
+            for (const a of assets) addNode(a.id || a.name, a.type || a.node_type || 'unknown', a.label || a.name);
+            for (const n of topoNodes) addNode(n.id || n.name, n.type || n.node_type || 'unknown', n.label || n.name);
+
+            // Also add architecture_map entry points / tools / models as nodes
+            for (const ep of (archMap.entry_points || [])) addNode(ep.id || ep.name, ep.type || 'trigger', ep.label || ep.name);
+            for (const mc of (archMap.model_connections || [])) {
+                if (mc.source) addNode(mc.source, 'ai_agent', mc.source);
+                if (mc.model) addNode(mc.model, 'model_provider', mc.model);
+            }
+            for (const td of (archMap.tool_definitions || [])) addNode(td.id || td.name, td.type || 'tool', td.label || td.name);
+
+            if (allNodes.length === 0) {
+                container.innerHTML = '';
+                if (topoCol) topoCol.style.display = 'none';
+                return;
+            }
+
+            // ── Build unified edge list ──
+            const allEdges = [];
+            const edgeSeen = new Set();
+
+            function addEdge(src, dst, label, classification, isCrossing) {
+                if (!src || !dst || src === dst) return;
+                const key = src + '→' + dst;
+                if (edgeSeen.has(key)) return;
+                edgeSeen.add(key);
+                if (nodeById[src]) nodeById[src].outDeg++;
+                if (nodeById[dst]) nodeById[dst].inDeg++;
+                allEdges.push({ src, dst, label: label || '', classification: classification || '', crossing: !!isCrossing });
+            }
+
+            // From data_flows
+            for (const df of dataFlows) {
+                const crossing = crossingEdgeSet.has(df.id) || df.crosses_boundary;
+                addEdge(df.source, df.destination, df.data_types ? df.data_types.join(', ') : df.label, df.classification, crossing);
+            }
+            // From topo edges
+            for (const e of topoEdges) {
+                const crossing = crossingEdgeSet.has(e.id);
+                addEdge(e.source, e.target, e.label, e.classification, crossing);
+            }
+            // From architecture map connections
+            for (const mc of (archMap.model_connections || [])) {
+                addEdge(mc.source, mc.model, mc.protocol || 'api', mc.classification, false);
+            }
+            // From entry points to their targets
+            for (const ep of (archMap.entry_points || [])) {
+                for (const tgt of (ep.connects_to || ep.targets || [])) {
+                    addEdge(ep.id || ep.name, tgt, 'entry', 'public', false);
+                }
+            }
+
+            // ── Classify nodes into source vs destination columns ──
+            const srcNodes = [];
+            const dstNodes = [];
+
+            for (const nd of allNodes) {
+                const isSrcType = _srcPreferTypes.has(nd.type);
+                const isDstType = _dstPreferTypes.has(nd.type);
+                const netOut = nd.outDeg - nd.inDeg;
+
+                if (isSrcType || (!isDstType && netOut > 0)) {
+                    srcNodes.push(nd);
+                    if (nd.inDeg > 0) dstNodes.push(nd); // both columns
+                } else if (isDstType || netOut < 0) {
+                    dstNodes.push(nd);
+                    if (nd.outDeg > 0) srcNodes.push(nd); // both columns
+                } else {
+                    // Balanced or no edges — put on both
+                    srcNodes.push(nd);
+                    dstNodes.push(nd);
+                }
+            }
+
+            // ── Group by trust boundary zone ──
+            function groupByZone(nodes) {
+                const zoned = {};
+                const unzoned = [];
+                for (const nd of nodes) {
+                    if (nd.zone) {
+                        if (!zoned[nd.zone]) zoned[nd.zone] = [];
+                        zoned[nd.zone].push(nd);
+                    } else {
+                        unzoned.push(nd);
+                    }
+                }
+                return { zoned, unzoned };
+            }
+
+            const srcGroups = groupByZone(srcNodes);
+            const dstGroups = groupByZone(dstNodes);
+
+            // ── Render DOM ──
+            function renderCardHtml(nd, side) {
+                const color = _flowNodeColors[nd.type] || '#6b6a60';
+                const threatBadge = nd.threatCount > 0 ? `<span class="card-threat-count">${nd.threatCount}</span>` : '';
+                return `<div class="flow-node-card" data-node-id="${escapeHtml(nd.id)}" data-side="${side}" title="${escapeHtml(nd.type + ': ' + nd.label)}">
+                    <span class="card-type-dot" style="background:${color};"></span>${escapeHtml(nd.label)}${threatBadge}
+                </div>`;
+            }
+
+            function renderZoneGroup(zoneId, nodes, side, zIdx) {
+                const tb = zoneInfo[zoneId];
+                const level = (tb && (tb.trust_level || tb.level || '')).toLowerCase();
+                const zc = _flowZoneColors[level] || _flowZoneColorArr[zIdx % _flowZoneColorArr.length];
+                const label = tb ? sanitize(tb.name || tb.label || zoneId) : zoneId;
+                return `<div class="flow-zone-group" style="background:${zc.bg};border:1px solid ${zc.border};">
+                    <div class="flow-zone-label">${escapeHtml(label)}</div>
+                    ${nodes.map(nd => renderCardHtml(nd, side)).join('')}
+                </div>`;
+            }
+
+            function renderColumn(groups, side) {
+                let html = `<div class="flow-column-header">${side === 'src' ? 'Sources' : 'Destinations'}</div>`;
+                let zIdx = 0;
+                for (const [zoneId, nodes] of Object.entries(groups.zoned)) {
+                    html += renderZoneGroup(zoneId, nodes, side, zIdx++);
+                }
+                if (groups.unzoned.length > 0) {
+                    html += groups.unzoned.map(nd => renderCardHtml(nd, side)).join('');
+                }
+                return html;
+            }
+
+            container.innerHTML = `
+                <div class="flow-columns">
+                    <div class="flow-column col-src">${renderColumn(srcGroups, 'src')}</div>
+                    <div class="flow-svg-spacer"></div>
+                    <div class="flow-column col-dst">${renderColumn(dstGroups, 'dst')}</div>
+                </div>
+                <svg class="flow-svg-overlay" id="flowSvgOverlay">
+                    <defs>
+                        <filter id="flowGlow" x="-50%" y="-50%" width="200%" height="200%">
+                            <feGaussianBlur stdDeviation="4" result="blur"/>
+                            <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+                        </filter>
+                    </defs>
+                </svg>
+            `;
+
+            // ── Index card elements ──
+            _flowNodeCards = {};
+            container.querySelectorAll('.flow-node-card').forEach(el => {
+                const nid = el.getAttribute('data-node-id');
+                const side = el.getAttribute('data-side');
+                if (!_flowNodeCards[nid]) _flowNodeCards[nid] = {};
+                if (side === 'src') _flowNodeCards[nid].srcEl = el;
+                else _flowNodeCards[nid].dstEl = el;
+            });
+
+            // ── Render SVG connections ──
+            _flowRenderConnections(container, allEdges);
+
+            // ── Attach card click/hover handlers ──
+            container.querySelectorAll('.flow-node-card').forEach(el => {
+                el.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    const nid = this.getAttribute('data-node-id');
+                    _flowHighlightNode(nid);
+                    // Also open findings panel
+                    const nd = nodeById[nid];
+                    if (nd) showNodeFindings(nd.label, nd.type);
+                });
+                el.addEventListener('mouseenter', function(e) {
+                    const nid = this.getAttribute('data-node-id');
+                    const nd = nodeById[nid];
+                    if (nd) _flowShowTooltip(e, `<b>${escapeHtml(nd.label)}</b><br>Type: ${nd.type}${nd.threatCount ? '<br>Threats: ' + nd.threatCount : ''}`);
+                });
+                el.addEventListener('mouseleave', _flowHideTooltip);
+            });
+
+            // ── Background click clears ──
+            container.addEventListener('click', function(e) {
+                if (e.target === container || e.target.classList.contains('flow-columns') || e.target.classList.contains('flow-svg-spacer')) {
+                    _flowClearHighlight();
+                }
+            });
+
+            // ── Keyboard escape clears ──
+            document.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape') _flowClearHighlight();
+            });
+
+            // ── ResizeObserver for SVG recalculation ──
+            if (window.ResizeObserver) {
+                const ro = new ResizeObserver(function() {
+                    if (_flowRendered && _activeTopoView === 'flow') {
+                        _flowRenderConnections(container, allEdges);
+                    }
+                });
+                ro.observe(container);
+            }
+
+            _flowRendered = true;
+            _flowLastRenderData = { detail, threatModel, allEdges, nodeById };
+            if (topoCol) topoCol.style.display = '';
+        }
+
+        function _flowRenderConnections(container, allEdges) {
+            const svg = container.querySelector('#flowSvgOverlay');
+            if (!svg) return;
+
+            // Set SVG size to match container
+            const rect = container.getBoundingClientRect();
+            svg.setAttribute('width', rect.width);
+            svg.setAttribute('height', rect.height);
+            svg.setAttribute('viewBox', `0 0 ${rect.width} ${rect.height}`);
+
+            // Clear old connections (keep defs)
+            const defs = svg.querySelector('defs');
+            svg.innerHTML = '';
+            svg.appendChild(defs);
+
+            _flowConnections = [];
+
+            // ── Trust boundary dividers ──
+            const srcCol = container.querySelector('.col-src');
+            const dstCol = container.querySelector('.col-dst');
+            if (srcCol && dstCol) {
+                const srcRect = srcCol.getBoundingClientRect();
+                const dstRect = dstCol.getBoundingClientRect();
+                const midX = (srcRect.right + dstRect.left) / 2 - rect.left;
+                // Draw a subtle vertical divider line
+                const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                line.setAttribute('x1', midX); line.setAttribute('y1', 10);
+                line.setAttribute('x2', midX); line.setAttribute('y2', rect.height - 10);
+                line.setAttribute('class', 'trust-boundary-divider');
+                svg.appendChild(line);
+                const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                label.setAttribute('x', midX); label.setAttribute('y', 10);
+                label.setAttribute('text-anchor', 'middle');
+                label.setAttribute('class', 'trust-boundary-label');
+                label.textContent = 'boundary';
+                svg.appendChild(label);
+            }
+
+            // ── Draw edges ──
+            for (const edge of allEdges) {
+                const srcCard = _flowNodeCards[edge.src];
+                const dstCard = _flowNodeCards[edge.dst];
+                if (!srcCard || !dstCard) continue;
+
+                const srcEl = srcCard.srcEl || srcCard.dstEl;
+                const dstEl = dstCard.dstEl || dstCard.srcEl;
+                if (!srcEl || !dstEl) continue;
+
+                const sRect = srcEl.getBoundingClientRect();
+                const dRect = dstEl.getBoundingClientRect();
+
+                // Source anchor: right edge center; Dest anchor: left edge center
+                const sx = sRect.right - rect.left;
+                const sy = sRect.top + sRect.height / 2 - rect.top;
+                const dx = dRect.left - rect.left;
+                const dy = dRect.top + dRect.height / 2 - rect.top;
+
+                // Bezier control points (horizontal offset ~40% of distance)
+                const cpOff = Math.max(40, Math.abs(dx - sx) * 0.4);
+                const d = `M${sx},${sy} C${sx + cpOff},${sy} ${dx - cpOff},${dy} ${dx},${dy}`;
+
+                const color = _flowClassColors[edge.classification] || '#3a3c38';
+
+                const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                group.setAttribute('class', 'conn-group');
+                group.setAttribute('data-src', edge.src);
+                group.setAttribute('data-dst', edge.dst);
+
+                // Layer 1: Glow
+                const glow = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                glow.setAttribute('d', d);
+                glow.setAttribute('class', 'conn-glow');
+                glow.setAttribute('stroke', color);
+                group.appendChild(glow);
+
+                // Layer 2: Base line
+                const line = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                line.setAttribute('d', d);
+                line.setAttribute('class', 'conn-line' + (edge.crossing ? ' crossing' : ''));
+                line.setAttribute('stroke', color);
+                group.appendChild(line);
+
+                // Layer 3: Flow particles
+                const flow = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                flow.setAttribute('d', d);
+                flow.setAttribute('class', 'conn-flow');
+                group.appendChild(flow);
+
+                // Crossing warning indicator
+                if (edge.crossing) {
+                    const mx = (sx + dx) / 2;
+                    const my = (sy + dy) / 2;
+                    const warn = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                    warn.setAttribute('x', mx); warn.setAttribute('y', my - 6);
+                    warn.setAttribute('text-anchor', 'middle');
+                    warn.setAttribute('class', 'conn-crossing-warn');
+                    warn.textContent = '\u26A0';
+                    group.appendChild(warn);
+                }
+
+                svg.appendChild(group);
+
+                // Hover/click handlers on connection
+                group.style.pointerEvents = 'stroke';
+                group.addEventListener('mouseenter', function(e) {
+                    const parts = [];
+                    if (edge.label) parts.push(edge.label);
+                    if (edge.classification) parts.push(`<span style="color:${color};">${edge.classification}</span>`);
+                    if (edge.crossing) parts.push('<span style="color:var(--amber);">&#x26A0; crosses trust boundary</span>');
+                    _flowShowTooltip(e, `${escapeHtml(edge.src)} &rarr; ${escapeHtml(edge.dst)}${parts.length ? '<br>' + parts.join(' | ') : ''}`);
+                });
+                group.addEventListener('mouseleave', _flowHideTooltip);
+                group.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    _flowHighlightConnection(edge.src, edge.dst);
+                });
+
+                _flowConnections.push({ group, srcId: edge.src, dstId: edge.dst, edge });
+            }
+        }
+
+        // ── Flow Interaction Handlers ──
+
+        function _flowClearHighlight() {
+            for (const [nid, cards] of Object.entries(_flowNodeCards)) {
+                if (cards.srcEl) { cards.srcEl.classList.remove('active', 'dimmed'); }
+                if (cards.dstEl) { cards.dstEl.classList.remove('active', 'dimmed'); }
+            }
+            for (const c of _flowConnections) {
+                c.group.classList.remove('highlight', 'dimmed');
+            }
+            _flowHideTooltip();
+        }
+
+        function _flowHighlightNode(nodeId) {
+            _flowClearHighlight();
+            const connectedNodes = new Set([nodeId]);
+            const connectedConns = new Set();
+
+            for (let i = 0; i < _flowConnections.length; i++) {
+                const c = _flowConnections[i];
+                if (c.srcId === nodeId || c.dstId === nodeId) {
+                    connectedNodes.add(c.srcId);
+                    connectedNodes.add(c.dstId);
+                    connectedConns.add(i);
+                }
+            }
+
+            // Dim/highlight cards
+            for (const [nid, cards] of Object.entries(_flowNodeCards)) {
+                const isConn = connectedNodes.has(nid);
+                if (cards.srcEl) { cards.srcEl.classList.toggle('active', isConn); cards.srcEl.classList.toggle('dimmed', !isConn); }
+                if (cards.dstEl) { cards.dstEl.classList.toggle('active', isConn); cards.dstEl.classList.toggle('dimmed', !isConn); }
+            }
+
+            // Dim/highlight connections
+            for (let i = 0; i < _flowConnections.length; i++) {
+                const c = _flowConnections[i];
+                c.group.classList.toggle('highlight', connectedConns.has(i));
+                c.group.classList.toggle('dimmed', !connectedConns.has(i));
+            }
+        }
+
+        function _flowHighlightConnection(srcId, dstId) {
+            _flowClearHighlight();
+            const connectedNodes = new Set([srcId, dstId]);
+
+            for (const [nid, cards] of Object.entries(_flowNodeCards)) {
+                const isConn = connectedNodes.has(nid);
+                if (cards.srcEl) { cards.srcEl.classList.toggle('active', isConn); cards.srcEl.classList.toggle('dimmed', !isConn); }
+                if (cards.dstEl) { cards.dstEl.classList.toggle('active', isConn); cards.dstEl.classList.toggle('dimmed', !isConn); }
+            }
+
+            for (const c of _flowConnections) {
+                const isMatch = c.srcId === srcId && c.dstId === dstId;
+                c.group.classList.toggle('highlight', isMatch);
+                c.group.classList.toggle('dimmed', !isMatch);
+            }
+        }
+
+        function _flowHighlightThreat(threat) {
+            if (!_flowRendered || _activeTopoView !== 'flow') return false;
+            _flowClearHighlight();
+            if (!threat || !threat.affected_components) return false;
+
+            const affected = new Set(threat.affected_components);
+            if (affected.size === 0) return false;
+
+            const sevColors = { critical: '#e74c3c', high: '#e07850', medium: '#d4a03a', low: '#3a3c38' };
+            const sevColor = sevColors[(threat.severity || '').toLowerCase()] || '#3a3c38';
+
+            // Highlight affected cards
+            for (const [nid, cards] of Object.entries(_flowNodeCards)) {
+                const isAff = affected.has(nid);
+                if (cards.srcEl) { cards.srcEl.classList.toggle('active', isAff); cards.srcEl.classList.toggle('dimmed', !isAff); }
+                if (cards.dstEl) { cards.dstEl.classList.toggle('active', isAff); cards.dstEl.classList.toggle('dimmed', !isAff); }
+            }
+
+            // Highlight connections between affected nodes with severity color
+            for (const c of _flowConnections) {
+                const isAff = affected.has(c.srcId) && affected.has(c.dstId);
+                if (isAff) {
+                    c.group.classList.add('highlight');
+                    c.group.querySelectorAll('.conn-glow, .conn-line').forEach(p => p.setAttribute('stroke', sevColor));
+                } else {
+                    c.group.classList.add('dimmed');
+                }
+            }
+            return true;
+        }
+
+        function _flowHighlightStride(filter) {
+            if (!_flowRendered || _activeTopoView !== 'flow') return false;
+            _flowClearHighlight();
+
+            if (filter === 'all') return true;
+
+            const pillar = _stridePillars[filter];
+            if (!pillar) return false;
+
+            const tm = _lastThreatModel;
+            if (!tm || !tm.threats) return false;
+
+            const affectedComponents = new Set();
+            for (const t of tm.threats) {
+                if (pillar.cats.includes(t.stride_category)) {
+                    for (const comp of (t.affected_components || [])) {
+                        affectedComponents.add(comp);
+                    }
+                }
+            }
+
+            if (affectedComponents.size === 0) return false;
+
+            for (const [nid, cards] of Object.entries(_flowNodeCards)) {
+                const isAff = affectedComponents.has(nid);
+                if (cards.srcEl) { cards.srcEl.classList.toggle('active', isAff); cards.srcEl.classList.toggle('dimmed', !isAff); }
+                if (cards.dstEl) { cards.dstEl.classList.toggle('active', isAff); cards.dstEl.classList.toggle('dimmed', !isAff); }
+            }
+
+            for (const c of _flowConnections) {
+                const touches = affectedComponents.has(c.srcId) || affectedComponents.has(c.dstId);
+                c.group.classList.toggle('highlight', touches);
+                c.group.classList.toggle('dimmed', !touches);
+            }
+            return true;
+        }
+
+        function _flowHighlightCompliance(fw, compId) {
+            if (!_flowRendered || _activeTopoView !== 'flow') return;
+            _flowClearHighlight();
+
+            const tm = _lastThreatModel;
+            if (!tm || !tm.threats) return;
+
+            // Find threats mapped to this compliance ID
+            const fwKeyMap = { owasp_llm: 'owasp_llm_ids', mitre_atlas: 'mitre_atlas_ids', nist_ai_rmf: 'nist_ai_rmf_ids', cwe: 'cwe_ids' };
+            const key = fwKeyMap[fw];
+            if (!key) return;
+
+            const affected = new Set();
+            for (const t of tm.threats) {
+                if (t[key] && t[key].includes(compId)) {
+                    for (const comp of (t.affected_components || [])) affected.add(comp);
+                }
+            }
+
+            if (affected.size === 0) return;
+
+            for (const [nid, cards] of Object.entries(_flowNodeCards)) {
+                const isAff = affected.has(nid);
+                if (cards.srcEl) { cards.srcEl.classList.toggle('active', isAff); cards.srcEl.classList.toggle('dimmed', !isAff); }
+                if (cards.dstEl) { cards.dstEl.classList.toggle('active', isAff); cards.dstEl.classList.toggle('dimmed', !isAff); }
+            }
+
+            for (const c of _flowConnections) {
+                const touches = affected.has(c.srcId) || affected.has(c.dstId);
+                c.group.classList.toggle('highlight', touches);
+                c.group.classList.toggle('dimmed', !touches);
+            }
+        }
+
+        // ── View toggle ──
+        function _switchTopoView(view) {
+            _activeTopoView = view;
+            const flowEl = document.getElementById('flowVisualization');
+            const cyEl = document.getElementById('unifiedTopologyGraph');
+            const spatialControls = document.getElementById('topoSpatialControls');
+
+            // Update tab buttons
+            document.querySelectorAll('.flow-tab').forEach(btn => {
+                btn.classList.toggle('active', btn.getAttribute('data-view') === view);
+            });
+
+            if (view === 'flow') {
+                if (flowEl) flowEl.style.display = '';
+                if (cyEl) cyEl.style.display = 'none';
+                if (spatialControls) spatialControls.classList.remove('visible');
+            } else {
+                if (flowEl) flowEl.style.display = 'none';
+                if (cyEl) { cyEl.style.display = ''; }
+                if (spatialControls) spatialControls.classList.add('visible');
+
+                // Lazy-load Cytoscape on first spatial tab open
+                if (!_spatialLazyLoaded && _flowLastRenderData) {
+                    _spatialLazyLoaded = true;
+                    _renderTopology(_flowLastRenderData.detail, _flowLastRenderData.threatModel).catch(e => console.error('Spatial render error:', e));
+                }
+                // Fit view if already rendered
+                if (_cyInstance) {
+                    setTimeout(function() { _cyInstance.resize(); _cyInstance.fit(undefined, 20); }, 50);
+                }
+            }
         }
 
         // ── Unified System Topology (Cytoscape.js-based) ──
@@ -12901,13 +13678,13 @@
             'restricted': '#e74c3c',
         };
 
-        // Trust boundary zone colors (soft, distinct backgrounds)
+        // Trust boundary zone colors (updated to match flow view palette)
         const _cyZoneColors = [
-            { bg: 'rgba(127,255,0,0.06)', border: 'rgba(127,255,0,0.25)' },
-            { bg: 'rgba(224,120,80,0.06)', border: 'rgba(224,120,80,0.25)' },
-            { bg: 'rgba(212,160,58,0.06)', border: 'rgba(212,160,58,0.25)' },
-            { bg: 'rgba(93,138,74,0.06)',  border: 'rgba(93,138,74,0.25)' },
-            { bg: 'rgba(138,157,104,0.06)',border: 'rgba(138,157,104,0.25)' },
+            { bg: 'rgba(93,138,74,0.08)',  border: 'rgba(93,138,74,0.30)' },   // trusted/internal
+            { bg: 'rgba(212,160,58,0.08)', border: 'rgba(212,160,58,0.30)' },   // semi-trusted
+            { bg: 'rgba(224,120,80,0.08)', border: 'rgba(224,120,80,0.30)' },   // external
+            { bg: 'rgba(231,76,60,0.08)',  border: 'rgba(231,76,60,0.30)' },    // untrusted
+            { bg: 'rgba(93,138,74,0.08)',  border: 'rgba(93,138,74,0.30)' },    // fallback
         ];
 
         function _cyEnsureTooltip() {
@@ -13421,12 +14198,20 @@
         }
 
         function _topoFitView() {
+            if (_activeTopoView === 'flow') {
+                _flowClearHighlight();
+                const flowContainer = document.getElementById('flowVisualization');
+                if (flowContainer) {
+                    const topoCol = flowContainer.closest('.tm-topo-col');
+                    if (topoCol) { topoCol.scrollTop = 0; topoCol.scrollLeft = 0; }
+                }
+                return;
+            }
             if (_cyInstance) {
                 _cyInstance.fit(undefined, 20);
                 _cyInstance.elements().removeClass('highlighted dimmed');
                 return;
             }
-            // Fallback for non-Cytoscape (shouldn't happen)
             const container = document.getElementById('unifiedTopologyGraph');
             if (!container) return;
             const topoCol = container.closest('.tm-topo-col');
@@ -13545,6 +14330,18 @@
             connected.addClass('highlighted');
         }
 
+        // ── Dispatch threat highlight to active view ──
+        function _highlightThreatDispatch(threat) {
+            if (_activeTopoView === 'flow') {
+                if (!_flowHighlightThreat(threat)) {
+                    // Fallback to spatial if flow couldn't highlight
+                    _topoHighlightThreat(threat);
+                }
+            } else {
+                _topoHighlightThreat(threat);
+            }
+        }
+
         // ── Layout toggle ──
         function _topoSetLayout(name) {
             _topoCurrentLayout = name;
@@ -13661,7 +14458,7 @@
                 if (t.mitre_atlas_ids && t.mitre_atlas_ids.length) tags.push(...t.mitre_atlas_ids.map(id => `<span class="badge" style="font-size:0.5rem;background:var(--toxic-dim);color:var(--toxic);padding:1px 3px;">${escapeHtml(id)}</span>`));
                 if (t.cwe_ids && t.cwe_ids.length) tags.push(...t.cwe_ids.map(id => `<span class="badge" style="font-size:0.5rem;background:var(--amber-dim);color:var(--amber);padding:1px 3px;">${escapeHtml(id)}</span>`));
 
-                return `<tr style="cursor:pointer;" onclick="_topoHighlightThreat(_threatTableThreats[${idx}])">
+                return `<tr style="cursor:pointer;" onclick="_highlightThreatDispatch(_threatTableThreats[${idx}])">
                     <td style="padding:0.375rem;"><span class="badge" style="font-size:0.5625rem;background:var(--bg-tertiary);color:var(--text-secondary);width:18px;display:inline-block;text-align:center;" title="${escapeHtml(catLabel)}">${pillarLetter}</span></td>
                     <td style="padding:0.375rem;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(t.title || '')}">${escapeHtml(t.title || '')}</td>
                     <td style="padding:0.375rem;"><span style="color:${sevColors[sev] || 'var(--text-muted)'};font-weight:600;text-transform:uppercase;font-size:0.5625rem;">${sev}</span></td>
@@ -13714,7 +14511,7 @@
                         <div style="display:flex;flex-wrap:wrap;gap:2px;">
                             ${ids.map(id => {
                                 const hit = fwActive.has(id);
-                                return `<span class="badge" style="font-size:0.5rem;padding:1px 4px;${hit ? `background:${fl.activeBg};color:${fl.activeColor};border:1px solid ${fl.activeColor};font-weight:600;` : 'background:var(--bg-deep);color:var(--text-muted);border:1px solid transparent;'}">${escapeHtml(id)}</span>`;
+                                return `<span class="badge" style="font-size:0.5rem;padding:1px 4px;cursor:${hit ? 'pointer' : 'default'};${hit ? `background:${fl.activeBg};color:${fl.activeColor};border:1px solid ${fl.activeColor};font-weight:600;` : 'background:var(--bg-deep);color:var(--text-muted);border:1px solid transparent;'}" ${hit ? `onclick="_flowHighlightCompliance('${fw}','${escapeHtml(id)}')"` : ''}>${escapeHtml(id)}</span>`;
                             }).join('')}
                         </div>
                     </div>
@@ -15640,11 +16437,13 @@
             input.value = '';
             input.style.height = 'auto';
 
-            // Show typing indicator
-            showTypingIndicator();
+            // Show typing indicator (with reasoning label for GPT-5/o-series)
+            const _cm = (getChatConfig().model || '').toLowerCase();
+            const _isReasoning = ['gpt-5', 'gpt5', 'o1', 'o3', 'o4'].some(p => _cm.startsWith(p));
+            showTypingIndicator(_isReasoning);
 
-            // Send to API (simulated for now)
-            sendToChat(message);
+            // Send to API
+            sendToChat(message, _isReasoning);
         }
 
         function sendSuggestion(text) {
@@ -15675,16 +16474,25 @@
             messagesEl.scrollTop = messagesEl.scrollHeight;
         }
 
-        function showTypingIndicator() {
+        function showTypingIndicator(isReasoning) {
             const messagesEl = document.getElementById('chatMessages');
             const typingEl = document.createElement('div');
             typingEl.className = 'typing-indicator';
             typingEl.id = 'typingIndicator';
-            typingEl.innerHTML = `
-                <div class="typing-dot"></div>
-                <div class="typing-dot"></div>
-                <div class="typing-dot"></div>
-            `;
+            if (isReasoning) {
+                typingEl.innerHTML = `
+                    <div class="typing-dot"></div>
+                    <div class="typing-dot"></div>
+                    <div class="typing-dot"></div>
+                    <span style="margin-left:0.5rem;font-size:0.6875rem;color:var(--toxic);font-style:italic;">Reasoning...</span>
+                `;
+            } else {
+                typingEl.innerHTML = `
+                    <div class="typing-dot"></div>
+                    <div class="typing-dot"></div>
+                    <div class="typing-dot"></div>
+                `;
+            }
             messagesEl.appendChild(typingEl);
             messagesEl.scrollTop = messagesEl.scrollHeight;
         }
@@ -15714,8 +16522,9 @@
 
         let _pendingFileContext = null;  // File context to attach to next chat message
 
-        async function sendToChat(message) {
+        async function sendToChat(message, isReasoning) {
             const chatConfig = getChatConfig();
+            let _reasoningTimer = null;
 
             try {
                 const toolsEnabled = document.getElementById('chatToolsEnabled')?.checked ?? true;
@@ -15736,11 +16545,27 @@
                     _pendingFileContext = null;
                 }
 
+                // Start elapsed timer for reasoning models
+                if (isReasoning) {
+                    const _startTime = Date.now();
+                    _reasoningTimer = setInterval(() => {
+                        const el = document.querySelector('#typingIndicator span');
+                        if (el) {
+                            const elapsed = Math.round((Date.now() - _startTime) / 1000);
+                            el.textContent = `Reasoning... ${elapsed}s`;
+                        }
+                    }, 1000);
+                }
+
+                // Extend timeout for reasoning models (5 min vs 2 min)
+                const chatTimeout = isReasoning ? 300000 : 120000;
                 const data = await apiFetch('/api/v1/chat', {
                     method: 'POST',
                     body: JSON.stringify(body),
+                    timeout: chatTimeout,
                 });
 
+                if (_reasoningTimer) clearInterval(_reasoningTimer);
                 hideTypingIndicator();
 
                 const response = data.response || 'No response received.';
@@ -15770,6 +16595,7 @@
                 }
 
             } catch (error) {
+                if (_reasoningTimer) clearInterval(_reasoningTimer);
                 hideTypingIndicator();
                 const errMsg = error.message || 'Unknown error';
                 if (errMsg.includes('502') || errMsg.includes('Cannot connect')) {
@@ -16515,11 +17341,11 @@
             if (!id) return;
             const target = data.target_name || id.slice(0, 8);
             if (!_activities[id]) {
-                _addActivity(id, 'scan', target, data.current_phase || 'Starting...');
+                _addActivity(id, 'scan', target, formatPhaseName(data.current_phase) || 'Starting...');
             }
             _updateActivity(id, {
                 pct: Math.round(data.progress || 0),
-                phase: data.current_phase || data.message || 'Running...',
+                phase: formatPhaseName(data.current_phase) || data.message || 'Running...',
                 detail: `${data.findings_count || 0} findings`,
                 status: data.status || 'running',
             });
@@ -18458,12 +19284,31 @@
                         <td>${escapeHtml(s.target)}</td>
                         <td><span class="badge badge-${s.status === 'completed' ? 'success' : s.status === 'running' ? 'running' : s.status === 'failed' ? 'error' : 'info'}">${s.status === 'running' ? s.status + ' ' + Math.round(s.progress || 0) + '%' : s.status}</span></td>
                         <td>${s.status === 'completed' || s.status === 'failed' ? `<span class="text-error">${s.critical_count || 0}</span> / ${s.findings_count || 0}` : s.status === 'running' && s.findings_count ? `<span class="text-error">${s.critical_count || 0}</span> / ${s.findings_count}` : '—'}</td>
-                        <td>${s.duration_seconds ? formatDuration(s.duration_seconds) : s.status === 'running' && s.current_phase ? s.current_phase : '—'}</td>
+                        <td>${s.duration_seconds ? formatDuration(s.duration_seconds) : s.status === 'running' && s.current_phase ? formatPhaseName(s.current_phase) : '—'}</td>
                     </tr>
                 `).join('');
             } catch (e) {
                 console.warn('Failed to load scans:', e.message);
             }
+        }
+
+        function formatPhaseName(phase) {
+            if (!phase) return '';
+            const labels = {
+                'deployment_scan': 'Deployment Scan',
+                'secret_detection': 'Secret Detection',
+                'infrastructure_scan': 'Infrastructure Scan',
+                'model_file_scan': 'Model File Scan',
+                'context_analysis': 'Context Analysis',
+                'mcp_analysis': 'MCP Analysis',
+                'attack_surface': 'Attack Surface',
+                'workflow_analysis': 'Workflow Analysis',
+                'model_interrogation': 'Model Interrogation',
+                'architecture_analysis': 'Architecture Analysis',
+                'rag_analysis': 'RAG Analysis',
+                'code_security_audit': 'Code Security Audit',
+            };
+            return labels[phase] || phase.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
         }
 
         function formatDuration(seconds) {
@@ -18635,6 +19480,20 @@
                 const st = f.status || 'open';
                 const isFixed = st === 'fixed';
 
+                // Extract detection method from meta for badge
+                let detectionBadge = '';
+                if (f.meta) {
+                    try {
+                        const _dm = typeof f.meta === 'string' ? JSON.parse(f.meta) : f.meta;
+                        const dm = _dm.detection_method;
+                        if (dm === 'llm_verified') {
+                            detectionBadge = ' <span style="font-size:0.5625rem;padding:0.05rem 0.3rem;border-radius:3px;background:var(--toxic);color:var(--bg-primary);font-weight:600;vertical-align:middle;">LLM</span>';
+                        } else if (dm === 'static' || dm === 'grep') {
+                            detectionBadge = ' <span style="font-size:0.5625rem;padding:0.05rem 0.3rem;border-radius:3px;background:var(--text-muted);color:var(--bg-primary);font-weight:600;vertical-align:middle;">STATIC</span>';
+                        }
+                    } catch (_) {}
+                }
+
                 // Extract verification data from meta
                 let verifyBadge = '<span style="color:var(--text-muted);font-size:0.625rem;">\u2014</span>';
                 let hasVerification = false;
@@ -18659,7 +19518,7 @@
                     <td><span class="badge badge-${severityClass[f.severity] || 'info'}">${f.severity}</span></td>
                     <td><span style="color:${statusColors[st] || '#a8a498'}">${statusIcons[st] || '\u25cf'}</span> ${st.replace('_', ' ')}</td>
                     <td>${escapeHtml(f.title)}</td>
-                    <td class="mono" style="font-size:0.75rem;">${escapeHtml(f.category || '\u2014')}</td>
+                    <td class="mono" style="font-size:0.75rem;">${escapeHtml(f.category || '\u2014')}${detectionBadge}</td>
                     <td>${escapeHtml(f.component || '\u2014')}</td>
                     <td>${verifyBadge}</td>
                     <td class="mono text-muted" style="font-size:0.75rem;">${f.file_path ? escapeHtml(f.file_path) + (f.line_number ? ':' + f.line_number : '') : '\u2014'}</td>
@@ -18736,6 +19595,11 @@
                 if (d.owasp_category) html += `<div class="finding-detail-field"><div class="label">OWASP</div><div class="value">${escapeHtml(d.owasp_category)}</div></div>`;
                 if (d.mitre_technique) html += `<div class="finding-detail-field"><div class="label">MITRE</div><div class="value">${escapeHtml(d.mitre_technique)}</div></div>`;
                 if (d.rule_id) html += `<div class="finding-detail-field"><div class="label">Rule</div><div class="value">${escapeHtml(d.rule_id)}</div></div>`;
+                if (d.detection_method) {
+                    const dmLabel = d.detection_method === 'llm_verified' ? 'LLM Verified' : 'Static';
+                    const dmColor = d.detection_method === 'llm_verified' ? 'var(--toxic)' : 'var(--text-secondary)';
+                    html += `<div class="finding-detail-field"><div class="label">Detection</div><div class="value" style="color:${dmColor}">${escapeHtml(dmLabel)}</div></div>`;
+                }
                 if (d.estimated_effort) html += `<div class="finding-detail-field"><div class="label">Effort</div><div class="value">${escapeHtml(d.estimated_effort)}</div></div>`;
                 if (d.confidence_level) html += `<div class="finding-detail-field"><div class="label">Confidence</div><div class="value">${escapeHtml(d.confidence_level)}</div></div>`;
                 html += '</div>';
@@ -18748,6 +19612,16 @@
                 // Attack surface
                 if (d.attack_surface) {
                     html += `<div class="finding-section"><div class="finding-section-title">Attack Surface</div><div class="finding-code-block">${escapeHtml(d.attack_surface)}</div></div>`;
+                }
+
+                // Exploit scenario (from code security audit)
+                if (d.exploit_scenario) {
+                    html += `<div class="finding-section"><div class="finding-section-title">Exploit Scenario</div><div style="font-size:0.8125rem;color:var(--text-secondary);line-height:1.5;">${escapeHtml(d.exploit_scenario)}</div></div>`;
+                }
+
+                // Data flow trace (from code security audit)
+                if (d.data_flow_trace) {
+                    html += `<div class="finding-section"><div class="finding-section-title">Data Flow</div><div class="finding-code-block">${escapeHtml(d.data_flow_trace)}</div></div>`;
                 }
 
                 // Vulnerable code / Source context
@@ -21325,7 +22199,7 @@ strategies:
 
                             const pct = Math.round(scan.progress || 0);
                             const scaledPct = 35 + Math.round(pct * 0.35); // Scale 0-100 to 35-70
-                            showFAProgress('faLgStepScan', `Scanning... ${pct}% | ${scan.current_phase || 'analyzing'}`, scaledPct);
+                            showFAProgress('faLgStepScan', `Scanning... ${pct}% | ${formatPhaseName(scan.current_phase) || 'analyzing'}`, scaledPct);
 
                             if (scan.status === 'completed' || scan.status === 'failed') {
                                 clearInterval(pollInterval);
@@ -24708,29 +25582,15 @@ strategies:
                         // Cache threat model for STRIDE → topology highlight integration
                         _lastThreatModel = fetchedThreatModel;
 
-                        // Render topology (needs threat model data for merge)
+                        // Render flow visualization (default view, unifies topology + component flow)
                         try {
-                            await _renderTopology(detail, fetchedThreatModel);
-                        } catch (e) { console.error('Topology render error:', e); }
-
-                        // Render component flow as Mermaid diagram
-                        const archMap = detail.architecture_map || {};
-                        const hasArchData = (archMap.entry_points || []).length > 0
-                            || (archMap.model_connections || []).length > 0
-                            || (archMap.tool_definitions || []).length > 0;
-                        if (hasArchData) {
-                            try { await _renderMermaidFlow(archMap, 'tmComponentFlow'); } catch (e) { console.error('Component flow render error:', e); }
-                        } else if (detail.has_models || detail.has_code) {
-                            // Architecture map empty but target has AI — show re-profile prompt
-                            const cfEl = document.getElementById('tmComponentFlow');
-                            if (cfEl) {
-                                cfEl.innerHTML = '<div style="padding:0.75rem;background:var(--bg-deep);border:1px solid var(--border);border-radius:6px;font-size:0.6875rem;color:var(--text-muted);text-align:center;margin-top:0.5rem;">AI architecture diagram unavailable &mdash; re-run assessment to generate</div>';
-                                cfEl.style.display = '';
-                            }
-                        }
+                            _renderFlowVisualization(detail, fetchedThreatModel);
+                        } catch (e) { console.error('Flow visualization error:', e); }
+                        // Cache data for lazy Cytoscape spatial view
+                        _spatialLazyLoaded = false;
 
                         // 4. Apply risk colors from findings (depends on topology being rendered)
-                        if (_topoRendered) {
+                        if (_flowRendered || _topoRendered) {
                             try {
                                 const findings = await apiFetch(`/api/v1/dashboard/scans/${scanId}/findings`);
                                 _nodeFindingsData = findings;
@@ -24746,10 +25606,11 @@ strategies:
                     renderResultsSummaryStats(detail, null, null);
                     renderNextStepCTAs(detail, null, null);
 
-                    // Render topology without threat model
-                    _renderTopology(detail, null).catch(e => console.error('Topology render error:', e));
-                    if (detail.architecture_map) {
-                        _renderMermaidFlow(detail.architecture_map, 'tmComponentFlow').catch(e => console.error('Component flow error:', e));
+                    // Render flow visualization without threat model
+                    try { _renderFlowVisualization(detail, null); } catch (e) { console.error('Flow visualization error:', e); }
+                    _spatialLazyLoaded = false;
+                    if (false) {
+                        // Mermaid component flow removed — unified into flow view
                     }
                 }
 
@@ -25516,7 +26377,7 @@ strategies:
 
                     document.getElementById('targetScanPercent').textContent = pct + '%';
                     document.getElementById('targetScanProgressBar').style.width = pct + '%';
-                    document.getElementById('targetScanPhase').textContent = scan.current_phase || scan.status || 'Running...';
+                    document.getElementById('targetScanPhase').textContent = formatPhaseName(scan.current_phase) || scan.status || 'Running...';
                     document.getElementById('targetScanFindingsCount').textContent = (scan.total_findings || 0) + ' findings';
                     if (scan.jobs_completed != null && scan.jobs_total) {
                         document.getElementById('targetScanJobsCount').textContent = scan.jobs_completed + '/' + scan.jobs_total + ' jobs';

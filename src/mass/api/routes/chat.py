@@ -164,6 +164,7 @@ class ChatProvidersResponse(BaseModel):
 from mass.api.utils.llm_config import (
     PROVIDER_DEFAULTS,
     adjust_params_for_model,
+    is_reasoning_model,
     resolve_api_key,
     resolve_llm_config,
 )
@@ -251,7 +252,8 @@ async def _chat_openai_compatible(
     import logging as _logging
     _chat_logger = _logging.getLogger(__name__)
 
-    async with httpx.AsyncClient(timeout=120.0) as client:
+    _timeout = 300.0 if is_reasoning_model(model) else 120.0
+    async with httpx.AsyncClient(timeout=_timeout) as client:
         resp = await client.post(url, json=payload, headers=headers)
         resp.raise_for_status()
         data = resp.json()
@@ -461,7 +463,8 @@ async def _raw_openai(
         payload["tools"] = tools
         payload["tool_choice"] = "auto"
 
-    async with httpx.AsyncClient(timeout=120.0) as client:
+    _timeout = 300.0 if is_reasoning_model(model) else 120.0
+    async with httpx.AsyncClient(timeout=_timeout) as client:
         resp = await client.post(url, json=payload, headers=headers)
         resp.raise_for_status()
         return resp.json()
@@ -732,9 +735,11 @@ async def chat(
             detail=f"Cannot connect to {provider} at {endpoint}. Is the service running?",
         )
     except (httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout):
+        is_reasoning = is_reasoning_model(model)
+        hint = " Reasoning models (GPT-5, o-series) may need extra time to think." if is_reasoning else ""
         raise HTTPException(
             status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-            detail=f"Request to {provider} ({model}) timed out. The model may be loading or the response is too long. Try again.",
+            detail=f"Request to {provider} ({model}) timed out.{hint} Try again.",
         )
     except httpx.HTTPStatusError as e:
         detail = e.response.text[:500] if e.response else str(e)
