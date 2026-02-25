@@ -1,4 +1,4 @@
-# MASS - Model & Application Security Suite
+# MASS - Model & Application Security Suite - AI Security Research and capabilities exploration for dealing with autonomous coding.
 
 [![CI](https://github.com/r33n3/MASS/actions/workflows/ci.yml/badge.svg)](https://github.com/r33n3/MASS/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/r33n3/MASS/branch/main/graph/badge.svg)](https://codecov.io/gh/r33n3/MASS)
