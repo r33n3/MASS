@@ -148,22 +148,6 @@ MASS Platform
 - [CLI Reference](docs/cli-reference/)
 - [Deployment Guide](docs/deployment/)
 
-## Credits & Acknowledgments
-
-MASS builds upon the pioneering work of several excellent open-source projects:
-
-| Project | Inspiration |
-|---------|-------------|
-| [garak](https://github.com/NVIDIA/garak) (NVIDIA) | Probe/detector plugin architecture |
-| [promptfoo](https://github.com/promptfoo/promptfoo) | YAML configs, CI/CD integration |
-| [AI-Infra-Guard](https://github.com/Tencent/AI-Infra-Guard) (Tencent) | Infrastructure CVE database, MCP analysis |
-| [agentic-radar](https://github.com/splx-ai/agentic-radar) | Workflow visualization |
-| [agentic_security](https://github.com/msoedov/agentic_security) | RL-based adaptive attacks |
-| [modelscan](https://github.com/protectai/modelscan) (Protect AI) | Model file security |
-| [BenderBox](https://github.com/r33n3/BenderBox) | Foundation interrogation engine |
-
-See [MASS_RALPH_LOOP_PLAN.md](MASS_RALPH_LOOP_PLAN.md) for full credits.
-
 ## Contributing
 
 Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
