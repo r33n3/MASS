@@ -13,8 +13,8 @@ We take security vulnerabilities seriously. If you discover a security issue in 
 ### How to Report
 
 1. **Do NOT** open a public GitHub issue for security vulnerabilities
-2. Email security concerns to: [security@example.com] (update with actual address)
-3. Or use GitHub's private vulnerability reporting feature
+2. Use [GitHub's private vulnerability reporting](https://github.com/r33n3/MASS/security/advisories/new) feature
+3. Or open a GitHub Discussion marked as private
 
 ### What to Include
 
@@ -133,6 +133,6 @@ We do not currently have a formal bug bounty program, but we recognize and appre
 
 ## Contact
 
-For security concerns: [security@example.com]
+For security concerns: Use [GitHub private vulnerability reporting](https://github.com/r33n3/MASS/security/advisories/new)
 
 For general questions: Open a GitHub Discussion

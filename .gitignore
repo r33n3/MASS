@@ -132,8 +132,15 @@ docs/_build/
 *.tfvars
 charts/*/charts/
 
-# ---------- Claude Code ----------
+# ---------- AI Assistant / IDE Config ----------
 .claude/
+.cursor/
+.aider*
+CLAUDE.md
+RALPH_PROMPT.md
+
+# ---------- Project-internal dev notes ----------
+docs/testing/ralph-progress.json
 
 # ---------- Temporary & Debug Output ----------
 tmp_*
@@ -149,6 +156,5 @@ openapi_tmp*
 /*.html
 
 # ---------- Windows Path-Mangled Artifacts ----------
-# Claude Code on Windows sometimes creates files with mangled paths
 [Cc]*Users*
 Users*

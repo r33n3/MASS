@@ -1,8 +1,8 @@
 {
-  "name": "aDiOS Platform",
-  "description": "AI Desktop Operating System with local LLM (Qwen3VL-8B), vision capabilities, MCP client integration, planning system, and tool broker. Custom Python-based AI agent framework.",
+  "name": "Example Local AI Agent",
+  "description": "Example deployment target for a local AI agent. Replace source_path with the absolute path to your project directory.",
   "version": "1.0.0",
   "source_type": "local",
-  "source_path": "C:\\Users\\bradj\\Development\\aDiOS",
-  "tags": ["local-llm", "mcp", "vision", "planning", "custom-framework"]
+  "source_path": "/path/to/your/project",
+  "tags": ["local-llm", "mcp", "custom-framework"]
 }
