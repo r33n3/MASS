@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, status
 
 from mass.api.dependencies import (
     CurrentTenantDep,
+    DBSession,
     APIKeyRepo,
     PaginationDep,
 )
@@ -74,12 +75,11 @@ async def list_api_keys(
         APIKeyResponse(
             id=key.id,
             name=key.name,
-            description=key.description,
-            key_prefix=key.key_prefix,
+            key_prefix=key.prefix,
             is_active=key.is_active,
             expires_at=key.expires_at,
-            last_used_at=key.last_used_at,
-            use_count=key.use_count or 0,
+            last_used_at=key.last_used,
+            use_count=0,
             created_at=key.created_at,
             updated_at=key.updated_at,
         )
@@ -108,6 +108,7 @@ async def create_api_key(
     request: APIKeyCreate,
     tenant: CurrentTenantDep,
     api_key_repo: APIKeyRepo,
+    db: DBSession,
 ) -> APIKeyResponse:
     """Create a new API key.
 
@@ -115,16 +116,27 @@ async def create_api_key(
     """
     # Generate the key
     full_key, key_hash = generate_api_key()
-    key_prefix = get_key_prefix(full_key)
+    prefix = get_key_prefix(full_key)
 
-    # Create the key in the database
-    from mass.storage.models.tenant import APIKey
+    # Get a user for this tenant (required FK on APIKey model)
+    from sqlalchemy import select
+    from mass.storage.models.tenant import APIKey, User
+
+    result = await db.execute(
+        select(User).where(User.tenant_id == tenant.tenant_id).limit(1)
+    )
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No user exists for this tenant. Create a user first.",
+        )
 
     api_key = APIKey(
         tenant_id=tenant.tenant_id,
+        user_id=user.id,
         name=request.name,
-        description=request.description,
-        key_prefix=key_prefix,
+        prefix=prefix,
         key_hash=key_hash,
         is_active=True,
         expires_at=request.expires_at,
@@ -135,8 +147,7 @@ async def create_api_key(
     return APIKeyResponse(
         id=created_key.id,
         name=created_key.name,
-        description=created_key.description,
-        key_prefix=created_key.key_prefix,
+        key_prefix=created_key.prefix,
         key=full_key,  # Only shown on creation
         is_active=created_key.is_active,
         expires_at=created_key.expires_at,
@@ -169,12 +180,11 @@ async def get_api_key_details(
     return APIKeyResponse(
         id=key.id,
         name=key.name,
-        description=key.description,
-        key_prefix=key.key_prefix,
+        key_prefix=key.prefix,
         is_active=key.is_active,
         expires_at=key.expires_at,
-        last_used_at=key.last_used_at,
-        use_count=key.use_count or 0,
+        last_used_at=key.last_used,
+        use_count=0,
         created_at=key.created_at,
         updated_at=key.updated_at,
     )

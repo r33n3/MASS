@@ -166,7 +166,7 @@ async def verify_finding(
     recommendation, current_code, error, llm_prompt, llm_response.
     """
     # Resolve provider config via shared resolver
-    cfg = resolve_llm_config(provider, model, api_key, endpoint)
+    cfg = resolve_llm_config(provider, model, api_key, endpoint, activity="finding_verification")
     resolved_model = cfg.model
     resolved_endpoint = cfg.endpoint
     resolved_key = cfg.api_key or None
@@ -221,24 +221,25 @@ async def verify_finding(
         current_code=current_code,
     )
 
+    resolved_provider = cfg.provider
     try:
-        if provider == "ollama":
+        if resolved_provider == "ollama":
             raw = await _call_ollama(prompt, resolved_model, resolved_endpoint)
-        elif provider in ("openai", "grok"):
+        elif resolved_provider in ("openai", "grok"):
             raw = await _call_openai(prompt, resolved_model, resolved_endpoint, resolved_key)
-        elif provider == "anthropic":
+        elif resolved_provider == "anthropic":
             raw = await _call_anthropic(prompt, resolved_model, resolved_endpoint, resolved_key)
         else:
             return {
                 "verdict": "inconclusive",
                 "confidence": 0.0,
-                "explanation": f"Unsupported provider: {provider}",
+                "explanation": f"Unsupported provider: {resolved_provider}",
                 "evidence": "",
                 "recommendation": "",
                 "current_code": current_code,
-                "provider": provider,
+                "provider": resolved_provider,
                 "model": resolved_model,
-                "error": f"Unsupported provider: {provider}",
+                "error": f"Unsupported provider: {resolved_provider}",
                 "llm_prompt": prompt,
                 "llm_response": None,
             }

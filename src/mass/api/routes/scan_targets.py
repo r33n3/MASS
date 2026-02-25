@@ -73,6 +73,10 @@ class ScanTargetRequest(BaseModel):
         default=None,
         description="Specific file paths within source_path to scan",
     )
+    exclude_paths: list[str] | None = Field(
+        default=None,
+        description="Glob patterns or file paths to exclude (e.g. 'docs/**', 'tests/', '*.md')",
+    )
 
     # Inline content (for targets that can be supplied directly)
     content: str | None = Field(
@@ -275,11 +279,15 @@ async def create_scan_target(
     if active_count + pending_count >= settings.scan_max_concurrent:
         # Queue the scan instead of rejecting — it will be picked up
         # when capacity frees up (by the worker poll loop or next request)
+        scan_config = {}
+        if request.exclude_paths:
+            scan_config["exclude_paths"] = request.exclude_paths
         queued_scan = Scan(
             tenant_id=tenant.tenant_id,
             deployment_id=created_deployment.id,
             profile=request.profile,
             status="queued",
+            config=json.dumps(scan_config) if scan_config else None,
             total_findings=0,
             critical_findings=0,
             high_findings=0,
@@ -301,11 +309,15 @@ async def create_scan_target(
         )
 
     # Create scan record
+    scan_config = {}
+    if request.exclude_paths:
+        scan_config["exclude_paths"] = request.exclude_paths
     scan = Scan(
         tenant_id=tenant.tenant_id,
         deployment_id=created_deployment.id,
         profile=request.profile,
         status=ScanStatus.PENDING.value,
+        config=json.dumps(scan_config) if scan_config else None,
         total_findings=0,
         critical_findings=0,
         high_findings=0,

@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, status
 
 from mass.api.dependencies import (
     CurrentTenantDep,
+    FindingRepo,
     ScanRepo,
     PaginationDep,
 )
@@ -207,16 +208,22 @@ async def list_presets() -> list[PresetResponse]:
     "/assess",
     response_model=AssessmentResponse,
     summary="Run compliance assessment",
-    description="Run a compliance assessment against a scan.",
+    description="Run a compliance assessment against a scan's findings using the real ComplianceAssessor.",
 )
 async def run_assessment(
     request: AssessmentRequest,
     tenant: CurrentTenantDep,
     scan_repo: ScanRepo,
+    finding_repo: FindingRepo,
 ) -> AssessmentResponse:
     """Run a compliance assessment against scan findings."""
     import uuid
     from datetime import datetime, timezone
+
+    from mass.compliance.assessor import ComplianceAssessor
+    from mass.compliance.mappings import RequirementStatus
+    from mass.core.types import AttackCategory, FrameworkType, Severity
+    from mass.core.findings import Finding as CoreFinding, ComponentType
 
     # Verify scan exists and belongs to tenant
     scan = await scan_repo.get(request.scan_id)
@@ -227,49 +234,127 @@ async def run_assessment(
             detail="Scan not found",
         )
 
-    # Validate frameworks
+    # Map API framework IDs to core FrameworkType enums
+    fw_id_map = {
+        "owasp:llm": FrameworkType.OWASP_LLM,
+        "mitre:atlas": FrameworkType.MITRE_ATLAS,
+        "nist:ai_rmf": FrameworkType.NIST_AI_RMF,
+        "eu:ai_act": FrameworkType.EU_AI_ACT,
+    }
+
+    framework_types = []
     for fw_id in request.frameworks:
-        if fw_id not in FRAMEWORKS:
+        ft = fw_id_map.get(fw_id)
+        if not ft:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Unknown framework: {fw_id}",
             )
+        framework_types.append(ft)
 
-    # TODO: Implement actual assessment logic
-    # For now, return a placeholder assessment
+    # Load findings from DB and convert to core Finding objects
+    db_findings = await finding_repo.list_by_scan(request.scan_id, limit=10000)
+
+    severity_map = {
+        "critical": Severity.CRITICAL,
+        "high": Severity.HIGH,
+        "medium": Severity.MEDIUM,
+        "low": Severity.LOW,
+        "info": Severity.INFO,
+    }
+
+    core_findings: list[CoreFinding] = []
+    for dbf in db_findings:
+        sev = severity_map.get(dbf.severity.lower(), Severity.INFO)
+        try:
+            cat = AttackCategory(dbf.category)
+        except ValueError:
+            cat = AttackCategory.SENSITIVE_INFO
+        core_findings.append(CoreFinding(
+            id=dbf.id,
+            title=dbf.title,
+            description=dbf.description,
+            severity=sev,
+            category=cat,
+            component_type=ComponentType.MODEL,
+            component_name="deployment",
+            file_path=dbf.file_path,
+            line_number=dbf.line_number,
+            cwe_ids=[dbf.cwe_id] if dbf.cwe_id else [],
+            owasp_ids=[dbf.owasp_category] if dbf.owasp_category else [],
+            mitre_ids=[dbf.mitre_technique] if dbf.mitre_technique else [],
+            scan_id=dbf.scan_id,
+        ))
+
+    # Run the real ComplianceAssessor
+    assessor = ComplianceAssessor(frameworks=framework_types)
+    result = assessor.assess(core_findings, scan_id=request.scan_id)
+
+    # Convert assessor result to API response schema
+    status_to_api = {
+        RequirementStatus.COMPLIANT: "pass",
+        RequirementStatus.NON_COMPLIANT: "fail",
+        RequirementStatus.PARTIAL: "partial",
+        RequirementStatus.NOT_APPLICABLE: "not_applicable",
+        RequirementStatus.NOT_ASSESSED: "not_assessed",
+    }
+
+    fw_name_map = {
+        FrameworkType.OWASP_LLM: "OWASP LLM Top 10",
+        FrameworkType.MITRE_ATLAS: "MITRE ATLAS",
+        FrameworkType.NIST_AI_RMF: "NIST AI RMF",
+        FrameworkType.EU_AI_ACT: "EU AI Act",
+    }
+
+    fw_id_reverse = {v: k for k, v in fw_id_map.items()}
 
     framework_assessments = []
-    for fw_id in request.frameworks:
-        fw = FRAMEWORKS[fw_id]
-        controls = [
-            ControlAssessment(
-                control_id=c["id"],
-                control_name=c["name"],
-                status="pass",  # TODO: Actually check findings
-                finding_count=0,
-            )
-            for c in fw["controls"]
-        ]
+    for fw_type, fw_assessment in result.frameworks.items():
+        controls = []
+        for req_id, req_assess in fw_assessment.requirements.items():
+            controls.append(ControlAssessment(
+                control_id=req_id,
+                control_name=req_assess.requirement.name,
+                status=status_to_api.get(req_assess.status, "not_assessed"),
+                finding_count=len(req_assess.findings),
+                finding_ids=[f.id for f in req_assess.findings],
+                notes=req_assess.notes or None,
+            ))
 
-        framework_assessments.append(
-            FrameworkAssessment(
-                framework_id=fw["id"],
-                framework_name=fw["name"],
-                overall_status="compliant",
-                pass_count=len(controls),
-                fail_count=0,
-                partial_count=0,
-                not_applicable_count=0,
-                compliance_percentage=100.0,
-                controls=controls,
-            )
-        )
+        overall_status = "compliant"
+        if fw_assessment.non_compliant_count > 0:
+            overall_status = "non_compliant"
+        elif fw_assessment.partial_count > 0:
+            overall_status = "partial"
+
+        framework_assessments.append(FrameworkAssessment(
+            framework_id=fw_id_reverse.get(fw_type, fw_type.value),
+            framework_name=fw_name_map.get(fw_type, fw_type.value),
+            overall_status=overall_status,
+            pass_count=fw_assessment.compliant_count,
+            fail_count=fw_assessment.non_compliant_count,
+            partial_count=fw_assessment.partial_count,
+            not_applicable_count=fw_assessment.not_applicable_count,
+            compliance_percentage=round(fw_assessment.compliance_score, 1),
+            controls=controls,
+        ))
+
+    # Build summary
+    summary_parts = [
+        f"Assessed {len(core_findings)} findings against {len(framework_types)} frameworks.",
+    ]
+    if result.overall_compliance_score >= 80:
+        summary_parts.append(f"Overall compliance: {result.overall_compliance_score:.1f}% (Good).")
+    elif result.overall_compliance_score >= 50:
+        summary_parts.append(f"Overall compliance: {result.overall_compliance_score:.1f}% (Needs improvement).")
+    else:
+        summary_parts.append(f"Overall compliance: {result.overall_compliance_score:.1f}% (Critical gaps detected).")
 
     return AssessmentResponse(
         id=str(uuid.uuid4()),
         scan_id=request.scan_id,
         created_at=datetime.now(timezone.utc),
-        overall_compliance=100.0,
+        overall_compliance=round(result.overall_compliance_score, 1),
         frameworks=framework_assessments,
-        summary="Compliance assessment completed. No violations found.",
+        summary=" ".join(summary_parts),
     )

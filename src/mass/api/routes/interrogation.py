@@ -713,6 +713,21 @@ async def _execute_interrogation(job_id: str) -> None:
 
     await _update_status("Starting...")
 
+    # Publish PROBE_STARTED event
+    try:
+        from mass.core.events import publish_event, Event, EventType
+        await publish_event(Event(
+            type=EventType.PROBE_STARTED,
+            data={
+                "job_id": job_id,
+                "attacker_model": job["attacker_model"],
+                "target_model": job["target_model"],
+            },
+            tenant_id=job.get("tenant_id"),
+        ))
+    except Exception:
+        pass
+
     try:
         from mass.interrogator.orchestrator import InterrogationOrchestrator
         from mass.api.services.ollama_manager import (
@@ -817,6 +832,25 @@ async def _execute_interrogation(job_id: str) -> None:
         except Exception:
             pass
 
+        # Publish PROBE_COMPLETED event
+        try:
+            from mass.core.events import publish_event, Event, EventType
+            from mass.core.metrics import METRICS
+            await publish_event(Event(
+                type=EventType.PROBE_COMPLETED,
+                data={
+                    "job_id": job_id,
+                    "findings_count": len(result.findings),
+                    "conversations": len(result.conversations),
+                    "successful_attacks": result.successful_attacks,
+                    "duration_seconds": result.duration_seconds,
+                },
+                tenant_id=job.get("tenant_id"),
+            ))
+            METRICS.inc("mass_probe_executions_total", help_text="Total probe executions")
+        except Exception:
+            pass
+
     except Exception as e:
         logger.exception("Interrogation %s failed: %s", job_id, e)
         await _save_job_to_redis(job_id, {
@@ -841,6 +875,17 @@ async def _execute_interrogation(job_id: str) -> None:
                 attacker_model=job["attacker_model"],
                 target_model=job["target_model"],
             )
+        except Exception:
+            pass
+
+        # Publish PROBE_FAILED event
+        try:
+            from mass.core.events import publish_event, Event, EventType
+            await publish_event(Event(
+                type=EventType.PROBE_FAILED,
+                data={"job_id": job_id, "error": str(e)},
+                tenant_id=job.get("tenant_id"),
+            ))
         except Exception:
             pass
 

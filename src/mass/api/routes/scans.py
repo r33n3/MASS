@@ -33,7 +33,14 @@ from mass.api.schemas.scan import (
     ThreatModelSummary,
 )
 from mass.api.schemas.deployment import DeploymentSummary
-from mass.api.schemas.finding import FindingResponse, FindingListResponse, FindingSummary
+from mass.api.schemas.finding import (
+    FindingResponse,
+    FindingListResponse,
+    FindingSummary,
+    FindingLocation,
+    GroupedFindingResponse,
+    GroupedFindingListResponse,
+)
 from mass.api.schemas.common import PaginationMeta
 from mass.core.types import ScanStatus
 from mass.storage.models.deployment import Scan
@@ -235,13 +242,20 @@ async def start_scan(
             ),
         )
 
+    # Build scan config, merging custom config with target_files/exclude_paths if provided
+    scan_config = dict(request.config) if request.config else {}
+    if request.target_files:
+        scan_config["target_files"] = request.target_files
+    if request.exclude_paths:
+        scan_config["exclude_paths"] = request.exclude_paths
+
     # Create the scan (only using fields that exist in model)
     scan = Scan(
         tenant_id=tenant.tenant_id,
         deployment_id=request.deployment_id,
         profile=request.profile.value if hasattr(request.profile, 'value') else request.profile,
         status=ScanStatus.PENDING.value,
-        config=json.dumps(request.config) if request.config else None,
+        config=json.dumps(scan_config) if scan_config else None,
         # Initialize findings counters
         total_findings=0,
         critical_findings=0,
@@ -469,11 +483,68 @@ async def cancel_scan(
     )
 
 
+def _parse_finding_meta(f: "Finding") -> dict:
+    """Parse the meta JSON column from a DB finding."""
+    import json
+
+    if f.meta:
+        try:
+            return json.loads(f.meta)
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return {}
+
+
+def _group_findings(
+    findings: "Sequence",
+    offset: int,
+    limit: int,
+) -> tuple[list[dict], int]:
+    """Group findings by (category, title).
+
+    Returns (paginated_groups, total_group_count).  Each group dict has:
+      representative, severity, confidence, locations, count.
+    """
+    _SEV_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+
+    groups: dict[tuple[str, str], dict] = {}
+    for f in findings:
+        key = (f.category, f.title)
+        if key not in groups:
+            groups[key] = {
+                "representative": f,
+                "severity": f.severity,
+                "confidence": 0.0,
+                "locations": [],
+                "count": 0,
+            }
+        g = groups[key]
+        g["count"] += 1
+        g["locations"].append({"file_path": f.file_path, "line_number": f.line_number})
+        # Promote to higher severity
+        if _SEV_RANK.get(f.severity, 4) < _SEV_RANK.get(g["severity"], 4):
+            g["severity"] = f.severity
+            g["representative"] = f
+        # Keep highest confidence
+        meta = _parse_finding_meta(f)
+        conf = meta.get("confidence", 1.0)
+        if conf > g["confidence"]:
+            g["confidence"] = conf
+
+    sorted_groups = sorted(
+        groups.values(),
+        key=lambda g: (_SEV_RANK.get(g["severity"], 4), -g["count"]),
+    )
+    total = len(sorted_groups)
+    paginated = sorted_groups[offset : offset + limit]
+    return paginated, total
+
+
 @router.get(
     "/{scan_id}/findings",
-    response_model=FindingListResponse,
+    response_model=None,
     summary="Get scan findings",
-    description="Get all findings from a scan.",
+    description="Get all findings from a scan. Use ?group=true to deduplicate.",
 )
 async def get_scan_findings(
     scan_id: str,
@@ -483,7 +554,8 @@ async def get_scan_findings(
     pagination: PaginationDep,
     severity: str | None = None,
     category: str | None = None,
-) -> FindingListResponse:
+    group: bool = Query(False, description="Group duplicate findings by category+title"),
+) -> FindingListResponse | GroupedFindingListResponse:
     """Get all findings from a scan."""
     scan = await scan_repo.get(scan_id)
 
@@ -493,6 +565,61 @@ async def get_scan_findings(
             detail="Scan not found",
         )
 
+    from mass.api.schemas.finding import ComplianceMapping
+
+    if group:
+        # Grouped / deduplicated mode
+        all_findings = await finding_repo.list_all_for_scan(
+            scan_id, severity=severity, category=category,
+        )
+        paginated_groups, total_groups = _group_findings(
+            all_findings, pagination.offset, pagination.limit,
+        )
+
+        items = []
+        for g in paginated_groups:
+            f = g["representative"]
+            meta_data = _parse_finding_meta(f)
+            items.append(
+                GroupedFindingResponse(
+                    id=f.id,
+                    scan_id=f.scan_id,
+                    title=f.title,
+                    description=f.description,
+                    severity=g["severity"],
+                    category=f.category,
+                    component_type=meta_data.get("component_type", "unknown"),
+                    component_name=meta_data.get("component_name", "unknown"),
+                    confidence=g["confidence"],
+                    compliance=ComplianceMapping(
+                        cwe_ids=[f.cwe_id] if f.cwe_id else [],
+                        owasp_ids=[f.owasp_category] if f.owasp_category else [],
+                        mitre_ids=[f.mitre_technique] if f.mitre_technique else [],
+                    ),
+                    remediation=f.remediation,
+                    tags=meta_data.get("tags", []),
+                    occurrence_count=g["count"],
+                    locations=[
+                        FindingLocation(
+                            file_path=loc["file_path"],
+                            line_number=loc["line_number"],
+                        )
+                        for loc in g["locations"]
+                    ],
+                )
+            )
+
+        return GroupedFindingListResponse(
+            items=items,
+            pagination=PaginationMeta(
+                total=total_groups,
+                offset=pagination.offset,
+                limit=pagination.limit,
+                has_more=pagination.offset + len(items) < total_groups,
+            ),
+        )
+
+    # Default: raw findings (existing behavior)
     filters = {"scan_id": scan_id}
     if severity:
         filters["severity"] = severity
@@ -504,25 +631,11 @@ async def get_scan_findings(
         limit=pagination.limit,
         **filters,
     )
-
     total = await finding_repo.count(**filters)
-
-    # Convert DB findings to response models
-    # DB model has different fields than the schema expects, so we map them
-    from mass.api.schemas.finding import ComplianceMapping
-    import json
 
     items = []
     for f in findings:
-        # Parse meta JSON for fields stored there by scan_execution
-        meta_data = {}
-        if f.meta:
-            try:
-                meta_data = json.loads(f.meta)
-            except (json.JSONDecodeError, TypeError):
-                pass
-
-        # Map singular DB fields to schema list fields
+        meta_data = _parse_finding_meta(f)
         cwe_ids = [f.cwe_id] if f.cwe_id else []
         owasp_ids = [f.owasp_category] if f.owasp_category else []
         mitre_ids = [f.mitre_technique] if f.mitre_technique else []
@@ -605,3 +718,56 @@ async def get_scan_findings_summary(
         suppressed=0,
         acknowledged=0,
     )
+
+
+@router.post(
+    "/{scan_id}/verify-finding/{finding_id}",
+    summary="Re-verify a finding",
+    description=(
+        "Run targeted re-verification of a specific finding against "
+        "the current source code. Much faster than a full rescan."
+    ),
+)
+async def verify_scan_finding(
+    scan_id: str,
+    finding_id: str,
+    tenant: CurrentTenantDep,
+    scan_repo: ScanRepo,
+    finding_repo: FindingRepo,
+    db: DBSession,
+) -> dict:
+    """Re-verify a specific finding against current source."""
+    scan = await scan_repo.get(scan_id)
+    if not scan or scan.tenant_id != tenant.tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Scan not found",
+        )
+
+    finding = await finding_repo.get(finding_id)
+    if not finding or finding.scan_id != scan_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Finding not found in this scan",
+        )
+
+    from mass.api.services.finding_verification import verify_finding
+
+    result = await verify_finding(finding)
+
+    # Update finding verification columns
+    verdict = result.get("verdict", "inconclusive")
+    update_fields = {
+        "verification_status": verdict,
+        "verification_model": result.get("model", ""),
+        "verification_reasoning": result.get("explanation", ""),
+        "verified_at": datetime.utcnow(),
+    }
+    await finding_repo.update(finding, **update_fields)
+    await db.commit()
+
+    return {
+        "finding_id": finding_id,
+        "scan_id": scan_id,
+        "verification": result,
+    }

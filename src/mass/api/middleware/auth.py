@@ -74,10 +74,32 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 "Unauthenticated request blocked: %s %s",
                 request.method, request.url.path,
             )
+            # Publish AUTH_FAILURE event (fire-and-forget)
+            try:
+                import asyncio
+                from mass.core.events import publish_event, Event, EventType
+                asyncio.ensure_future(publish_event(Event(
+                    type=EventType.AUTH_FAILURE,
+                    data={"path": request.url.path, "method": request.method},
+                )))
+            except Exception:
+                pass
             return JSONResponse(
                 status_code=401,
                 content={"detail": "Authentication required"},
             )
+
+        # Publish AUTH_SUCCESS event for authenticated requests
+        if api_key:
+            try:
+                import asyncio
+                from mass.core.events import publish_event, Event, EventType
+                asyncio.ensure_future(publish_event(Event(
+                    type=EventType.AUTH_SUCCESS,
+                    data={"path": request.url.path, "method": request.method},
+                )))
+            except Exception:
+                pass
 
         return await call_next(request)
 

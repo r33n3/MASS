@@ -25,6 +25,7 @@ class ReportFormat(str, Enum):
     HTML = "html"
     JSON = "json"
     PDF = "pdf"  # Placeholder for future PDF support
+    AIBOM = "aibom"
 
 
 @dataclass
@@ -159,9 +160,34 @@ class ReportGenerator:
                 verdict=verdict, threat_model=threat_model,
             )
             filename = f"mass_report_{timestamp}.json"
+        elif format == ReportFormat.AIBOM:
+            from mass.reporting.formats.aibom import AIBOMGenerator
+            bom_gen = AIBOMGenerator()
+            content = bom_gen.generate_json(
+                findings=findings,
+                scan_id=scan_id,
+                deployment_name=metadata.get("deployment_name", "") if metadata else "",
+                deployment_path=metadata.get("deployment_path", "") if metadata else "",
+                scan_metadata=metadata,
+                architecture_map=metadata.get("architecture_map") if metadata else None,
+            )
+            filename = f"mass_aibom_{timestamp}.cdx.json"
         elif format == ReportFormat.PDF:
-            # PDF generation placeholder
-            content = self._generate_pdf_placeholder(findings)
+            from mass.reporting.formats.pdf import PdfFormatter
+            pdf = PdfFormatter(
+                title=self.config.title,
+                include_charts=self.config.include_charts,
+            )
+            content = pdf.format(
+                findings,
+                scan_id=scan_id,
+                compliance_result=compliance_result,
+                metadata=metadata,
+                verdict=verdict,
+                threat_model=threat_model,
+                report_type=report_type,
+                ai_summary=ai_summary,
+            )
             filename = f"mass_report_{timestamp}.pdf"
         else:
             raise ValueError(f"Unsupported format: {format}")
@@ -235,16 +261,6 @@ class ReportGenerator:
             saved[fmt] = report.save(output_dir)
 
         return saved
-
-    def _generate_pdf_placeholder(self, findings: list[Finding]) -> bytes:
-        """Generate PDF placeholder.
-
-        Note: Full PDF generation would require reportlab or similar library.
-        This is a placeholder that returns empty bytes.
-        """
-        # In a full implementation, this would use reportlab or weasyprint
-        # to generate a proper PDF from the HTML content
-        return b"%PDF-1.4\n% MASS Security Report (PDF generation not implemented)\n"
 
     @staticmethod
     def from_scan_result(

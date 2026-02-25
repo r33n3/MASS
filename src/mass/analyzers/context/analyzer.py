@@ -304,7 +304,7 @@ class ContextAnalyzer:
             line_content = lines[line_num - 1] if 0 < line_num <= len(lines) else ""
 
             # Check for false positives
-            if self._is_false_positive(match.group(0), pattern, line_content):
+            if self._is_false_positive(match.group(0), pattern, line_content, file_path):
                 continue
 
             # Capture surrounding code context (3 lines before/after)
@@ -330,11 +330,36 @@ class ContextAnalyzer:
                 remediation=pattern.remediation,
             )
 
+    # Regex for lines that define patterns / regex strings (the match is
+    # inside a string literal used for detection, not an actual instruction).
+    _PATTERN_DEFINITION_RE = re.compile(
+        r"""(?:"""
+        r"""pattern\s*[=:]\s*r?["']|"""       # pattern = r"..." or pattern: "..."
+        r"""re\.compile\s*\(|"""               # re.compile(...)
+        r"""_PATTERNS?\s*[=\[]|"""             # _PATTERNS = [ or _PATTERN = ...
+        r"""RISK_PATTERNS|"""                  # RISK_PATTERNS reference
+        r"""examples?\s*[=:\[]|"""             # examples = [ or example: [
+        r"""test_(?:prompt|payload|input)|"""  # test_prompt / test_payload
+        r"""description\s*[=:]\s*["']"""       # description = "..." / description: "..."
+        r""")""",
+        re.IGNORECASE,
+    )
+
+    # File paths that indicate security tooling / detection code.
+    _SECURITY_TOOL_PATH_RE = re.compile(
+        r"(?:analyzer|detector|scanner|probe|checker|validator|"
+        r"security|jailbreak|injection|adversarial|"
+        r"test_|tests/|spec/|__test__|"
+        r"examples?/|samples?/|fixtures?/)",
+        re.IGNORECASE,
+    )
+
     def _is_false_positive(
         self,
         match_text: str,
         pattern: RiskPattern,
         line_content: str,
+        file_path: Path | None = None,
     ) -> bool:
         """Check if match is a false positive.
 
@@ -342,6 +367,7 @@ class ContextAnalyzer:
             match_text: Matched text.
             pattern: Pattern that matched.
             line_content: Full line content.
+            file_path: Optional file path for context-aware filtering.
 
         Returns:
             True if likely a false positive.
@@ -350,6 +376,8 @@ class ContextAnalyzer:
         for hint in pattern.false_positive_hints:
             if hint.lower() in line_content.lower():
                 return True
+
+        line_lower = line_content.lower()
 
         # Common false positive indicators
         false_positive_contexts = [
@@ -362,9 +390,32 @@ class ContextAnalyzer:
             "prohibited example",
         ]
 
-        line_lower = line_content.lower()
         for fp_context in false_positive_contexts:
             if fp_context in line_lower:
+                return True
+
+        # The match appears inside a pattern definition, regex, or test fixture.
+        # Security tools define jailbreak patterns for detection — not as
+        # actual instructions.
+        if self._PATTERN_DEFINITION_RE.search(line_content):
+            return True
+
+        # Lines that are Python/YAML comments or docstrings describing
+        # security patterns rather than executing them.
+        stripped = line_content.strip()
+        if stripped.startswith(("#", "//", "*", "- #")):
+            # Comment line — check if it's describing detection logic
+            detection_words = {"detect", "check", "analyze", "scan", "pattern", "match", "filter"}
+            if any(w in line_lower for w in detection_words):
+                return True
+
+        # File path indicates this is security tooling / test code that
+        # contains patterns as reference data (the "scanning the scanner" problem).
+        if file_path and self._SECURITY_TOOL_PATH_RE.search(str(file_path)):
+            # For files in security tool paths, only flag CRITICAL findings
+            # that are NOT in jailbreak or prompt_injection categories
+            # (those are almost always reference data in security tools).
+            if pattern.category in (RiskCategory.JAILBREAK, RiskCategory.PROMPT_INJECTION):
                 return True
 
         return False

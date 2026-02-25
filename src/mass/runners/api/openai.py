@@ -10,6 +10,7 @@ from typing import Any
 
 from mass.runners.base import BaseRunner, RunnerResult, RunnerStatus, ToolCall, register_runner
 from mass.runners.pool import rate_limiter
+from mass.api.utils.llm_config import is_reasoning_model
 
 
 @register_runner
@@ -116,22 +117,34 @@ class OpenAIRunner(BaseRunner):
             client = self._get_client()
 
             # Support full message history override
+            resolved_model = kwargs.get("model", self.model)
+            _reasoning = is_reasoning_model(resolved_model)
+
             messages_override = kwargs.get("messages")
             if messages_override:
                 messages = list(messages_override)
+                if _reasoning:
+                    for m in messages:
+                        if m.get("role") == "system":
+                            m["role"] = "developer"
             else:
                 messages = []
                 if system_prompt:
-                    messages.append({"role": "system", "content": system_prompt})
+                    role = "developer" if _reasoning else "system"
+                    messages.append({"role": role, "content": system_prompt})
                 if prompt:
                     messages.append({"role": "user", "content": prompt})
 
             api_kwargs: dict[str, Any] = {
-                "model": kwargs.get("model", self.model),
+                "model": resolved_model,
                 "messages": messages,
-                "temperature": kwargs.get("temperature", self.temperature),
-                "max_tokens": kwargs.get("max_tokens", self.max_tokens),
             }
+
+            if _reasoning:
+                api_kwargs["max_completion_tokens"] = kwargs.get("max_tokens", 16384)
+            else:
+                api_kwargs["temperature"] = kwargs.get("temperature", self.temperature)
+                api_kwargs["max_tokens"] = kwargs.get("max_tokens", self.max_tokens)
 
             tools = kwargs.get("tools")
             if tools:
@@ -206,22 +219,34 @@ class OpenAIRunner(BaseRunner):
                 self._async_client = AsyncOpenAI(**client_kwargs)
             client = self._async_client
 
+            resolved_model = kwargs.get("model", self.model)
+            _reasoning = is_reasoning_model(resolved_model)
+
             messages_override = kwargs.get("messages")
             if messages_override:
                 messages = list(messages_override)
+                if _reasoning:
+                    for m in messages:
+                        if m.get("role") == "system":
+                            m["role"] = "developer"
             else:
                 messages = []
                 if system_prompt:
-                    messages.append({"role": "system", "content": system_prompt})
+                    role = "developer" if _reasoning else "system"
+                    messages.append({"role": role, "content": system_prompt})
                 if prompt:
                     messages.append({"role": "user", "content": prompt})
 
             api_kwargs: dict[str, Any] = {
-                "model": kwargs.get("model", self.model),
+                "model": resolved_model,
                 "messages": messages,
-                "temperature": kwargs.get("temperature", self.temperature),
-                "max_tokens": kwargs.get("max_tokens", self.max_tokens),
             }
+
+            if _reasoning:
+                api_kwargs["max_completion_tokens"] = kwargs.get("max_tokens", 16384)
+            else:
+                api_kwargs["temperature"] = kwargs.get("temperature", self.temperature)
+                api_kwargs["max_tokens"] = kwargs.get("max_tokens", self.max_tokens)
 
             tools = kwargs.get("tools")
             if tools:

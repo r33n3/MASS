@@ -31,6 +31,7 @@ def create_runner(
     import mass.runners.api.azure_openai  # noqa: F401
     import mass.runners.api.gemini  # noqa: F401
     import mass.runners.api.grok  # noqa: F401
+    import mass.runners.api.browser  # noqa: F401
 
     # Map provider names to runner names
     provider_map = {
@@ -49,6 +50,7 @@ def create_runner(
         "vertex": "gemini",
         "grok": "grok",
         "xai": "grok",
+        "browser": "browser",
     }
 
     runner_name = provider_map.get(provider.lower())

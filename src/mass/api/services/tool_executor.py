@@ -298,6 +298,183 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "required": ["scenario_name"],
         },
     },
+    # ------------------------------------------------------------------
+    # New module tools — Cloud, Supply Chain, Privacy, Threat Intel,
+    # CI/CD, Cross-Model, Explainability
+    # ------------------------------------------------------------------
+    {
+        "name": "list_cloud_accounts",
+        "description": (
+            "List registered cloud accounts (AWS, Azure, GCP, Kubernetes) "
+            "with provider, region, resource counts, and last discovery timestamp. "
+            "Use when users ask about cloud infrastructure or accounts."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "description": "Max accounts to return (default 10)",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "list_supply_chain_issues",
+        "description": (
+            "List supply chain packages and known vulnerabilities. "
+            "Shows package name, version, ecosystem, license risk, and "
+            "vulnerability counts. Use when users ask about dependencies, "
+            "SBOMs, or supply chain security."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "ecosystem": {
+                    "type": "string",
+                    "enum": ["pypi", "npm", "cargo", "go", "maven", "nuget", "huggingface"],
+                    "description": "Filter by package ecosystem",
+                },
+                "severity": {
+                    "type": "string",
+                    "enum": ["critical", "high", "medium", "low"],
+                    "description": "Filter vulnerabilities by minimum severity",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max items to return (default 20)",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "get_privacy_status",
+        "description": (
+            "Get privacy compliance status including Privacy Impact Assessments, "
+            "PII exposure analysis, and data flow mappings. "
+            "Use when users ask about privacy, GDPR, CCPA, or PII handling."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "scan_id": {
+                    "type": "string",
+                    "description": "Optional scan ID to analyze PII exposure for",
+                },
+                "framework": {
+                    "type": "string",
+                    "enum": ["gdpr", "ccpa", "hipaa", "sox", "pci_dss"],
+                    "description": "Compliance framework to check against",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max items to return (default 10)",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "get_threat_intel",
+        "description": (
+            "Get threat intelligence items, MITRE ATLAS technique coverage, "
+            "and AI-specific threat analysis. Use when users ask about threats, "
+            "attack techniques, or security coverage gaps."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["items", "coverage", "techniques"],
+                    "description": "What to retrieve: threat items, coverage summary, or technique list (default items)",
+                },
+                "severity": {
+                    "type": "string",
+                    "enum": ["critical", "high", "medium", "low"],
+                    "description": "Filter items by severity",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max items to return (default 10)",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "list_cicd_integrations",
+        "description": (
+            "List CI/CD integrations (GitHub, GitLab, generic webhooks) "
+            "and recent build results. Shows integration status, quality gate "
+            "verdicts, and scan triggers. Use when users ask about CI/CD, "
+            "pipelines, or automated security scanning."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "include_builds": {
+                    "type": "boolean",
+                    "description": "Include recent builds (default true)",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max items to return (default 10)",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "get_cross_model_results",
+        "description": (
+            "Get cross-model security comparison results showing how different "
+            "AI models compare on vulnerability categories, with rankings by "
+            "security score. Use when users ask about model comparisons, "
+            "which model is more secure, or comparative security analysis."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "comparison_id": {
+                    "type": "string",
+                    "description": "Specific comparison ID to get details for",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max comparisons to list (default 5)",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "explain_finding_ai",
+        "description": (
+            "Get an AI-generated plain-language explanation of a security finding. "
+            "Includes business impact, attack chain narrative, remediation steps "
+            "with code examples, and compliance context. Much more detailed than "
+            "get_finding_detail. Use when users want to understand what a finding "
+            "means, its real-world impact, or how to fix it."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "finding_id": {
+                    "type": "string",
+                    "description": "The finding ID to explain",
+                },
+                "audience": {
+                    "type": "string",
+                    "enum": ["developer", "executive", "security_team"],
+                    "description": "Target audience for the explanation (default developer)",
+                },
+            },
+            "required": ["finding_id"],
+        },
+    },
 ]
 
 
@@ -1232,3 +1409,469 @@ class ToolExecutor:
         except Exception as exc:
             logger.warning("start_sandbox_run failed: %s", exc)
             return {"error": str(exc)}
+
+    # ------------------------------------------------------------------
+    # Cloud tools
+    # ------------------------------------------------------------------
+
+    async def _tool_list_cloud_accounts(self, limit: int = 10) -> dict[str, Any]:
+        """List registered cloud accounts."""
+        try:
+            from mass.api.services.cloud import list_accounts
+
+            accounts, total = await list_accounts(
+                tenant_id=self.tenant_id, limit=limit, offset=0,
+            )
+            items = [
+                {
+                    "id": a.get("id", ""),
+                    "provider": a.get("provider", ""),
+                    "name": a.get("name", ""),
+                    "account_id": a.get("account_id", ""),
+                    "region": a.get("region", ""),
+                    "resources_count": a.get("resources_count", 0),
+                    "has_credentials": a.get("has_credentials", False),
+                    "last_discovery_at": a.get("last_discovery_at", ""),
+                }
+                for a in accounts
+            ]
+            return {"accounts": items, "total": total}
+        except Exception as exc:
+            logger.warning("list_cloud_accounts failed: %s", exc)
+            return {"error": str(exc), "accounts": []}
+
+    # ------------------------------------------------------------------
+    # Supply Chain tools
+    # ------------------------------------------------------------------
+
+    async def _tool_list_supply_chain_issues(
+        self,
+        ecosystem: str | None = None,
+        severity: str | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        """List supply chain packages and vulnerabilities."""
+        try:
+            from mass.api.services.supply_chain import (
+                list_packages,
+                list_vulnerabilities,
+            )
+
+            packages, pkg_total = await list_packages(
+                tenant_id=self.tenant_id,
+                ecosystem=ecosystem,
+                limit=limit,
+                offset=0,
+            )
+            pkg_items = [
+                {
+                    "id": p.get("id", ""),
+                    "name": p.get("name", ""),
+                    "version": p.get("version", ""),
+                    "ecosystem": p.get("ecosystem", ""),
+                    "license": p.get("license", ""),
+                    "license_risk": p.get("license_risk", ""),
+                    "verification_status": p.get("verification_status", ""),
+                    "vulnerabilities": len(p.get("vulnerabilities", [])),
+                }
+                for p in packages
+            ]
+
+            vulns, vuln_total = await list_vulnerabilities(
+                tenant_id=self.tenant_id,
+                severity=severity,
+                limit=limit,
+                offset=0,
+            )
+            vuln_items = [
+                {
+                    "id": v.get("id", ""),
+                    "cve_id": v.get("cve_id", ""),
+                    "affected_package": v.get("affected_package", ""),
+                    "severity": v.get("severity", ""),
+                    "description": (v.get("description", ""))[:200],
+                }
+                for v in vulns
+            ]
+
+            return {
+                "packages": pkg_items,
+                "packages_total": pkg_total,
+                "vulnerabilities": vuln_items,
+                "vulnerabilities_total": vuln_total,
+            }
+        except Exception as exc:
+            logger.warning("list_supply_chain_issues failed: %s", exc)
+            return {"error": str(exc), "packages": [], "vulnerabilities": []}
+
+    # ------------------------------------------------------------------
+    # Privacy tools
+    # ------------------------------------------------------------------
+
+    async def _tool_get_privacy_status(
+        self,
+        scan_id: str | None = None,
+        framework: str | None = None,
+        limit: int = 10,
+    ) -> dict[str, Any]:
+        """Get privacy compliance status."""
+        try:
+            from mass.api.services.privacy import (
+                list_pias,
+                get_pii_exposure,
+                list_data_flows,
+                list_framework_checks,
+            )
+
+            result: dict[str, Any] = {}
+
+            # Privacy Impact Assessments
+            pias, pia_total = await list_pias(
+                tenant_id=self.tenant_id, limit=limit, offset=0,
+            )
+            result["assessments"] = [
+                {
+                    "id": p.get("id", ""),
+                    "status": p.get("status", ""),
+                    "overall_risk": p.get("overall_risk", ""),
+                    "total_findings": p.get("total_findings", 0),
+                    "findings_by_risk": p.get("findings_by_risk", {}),
+                    "frameworks_assessed": p.get("frameworks_assessed", []),
+                    "created_at": p.get("created_at", ""),
+                }
+                for p in pias
+            ]
+            result["assessments_total"] = pia_total
+
+            # PII exposure for a specific scan
+            if scan_id:
+                exposure = await get_pii_exposure(
+                    tenant_id=self.tenant_id, scan_id=scan_id,
+                )
+                result["pii_exposure"] = {
+                    "scan_id": scan_id,
+                    "total_findings_with_pii": exposure.get("total_findings_with_pii", 0),
+                    "pii_categories_found": exposure.get("pii_categories_found", []),
+                    "high_risk_pii": exposure.get("high_risk_pii", 0),
+                    "exposure_by_category": exposure.get("exposure_by_category", {}),
+                }
+
+            # Data flows summary
+            flows, flow_total = await list_data_flows(
+                tenant_id=self.tenant_id, limit=5, offset=0,
+            )
+            result["data_flows"] = [
+                {
+                    "id": f.get("id", ""),
+                    "name": f.get("name", ""),
+                    "source": f.get("source", ""),
+                    "destination": f.get("destination", ""),
+                    "direction": f.get("direction", ""),
+                    "pii_categories": f.get("pii_categories", []),
+                    "risk_level": f.get("risk_level", ""),
+                }
+                for f in flows
+            ]
+            result["data_flows_total"] = flow_total
+
+            # Framework compliance check
+            if framework:
+                checks, check_total = await list_framework_checks(
+                    tenant_id=self.tenant_id, framework=framework,
+                    limit=1, offset=0,
+                )
+                if checks:
+                    c = checks[0]
+                    result["compliance"] = {
+                        "framework": framework,
+                        "overall_status": c.get("overall_status", ""),
+                        "score": c.get("score", 0),
+                        "controls_assessed": c.get("controls_assessed", 0),
+                        "controls_compliant": c.get("controls_compliant", 0),
+                        "controls_non_compliant": c.get("controls_non_compliant", 0),
+                    }
+
+            return result
+        except Exception as exc:
+            logger.warning("get_privacy_status failed: %s", exc)
+            return {"error": str(exc)}
+
+    # ------------------------------------------------------------------
+    # Threat Intel tools
+    # ------------------------------------------------------------------
+
+    async def _tool_get_threat_intel(
+        self,
+        action: str = "items",
+        severity: str | None = None,
+        limit: int = 10,
+    ) -> dict[str, Any]:
+        """Get threat intelligence data."""
+        try:
+            from mass.api.services.threat_intel import (
+                list_items,
+                list_techniques,
+                get_coverage_summary,
+                ensure_techniques_loaded,
+            )
+
+            if action == "coverage":
+                await ensure_techniques_loaded(self.tenant_id)
+                summary = await get_coverage_summary(self.tenant_id)
+                return {
+                    "type": "coverage",
+                    "total_techniques": summary.get("total_techniques", 0),
+                    "covered": summary.get("covered", 0),
+                    "partially_covered": summary.get("partially_covered", 0),
+                    "not_covered": summary.get("not_covered", 0),
+                    "coverage_percent": summary.get("coverage_percent", 0),
+                    "by_tactic": summary.get("by_tactic", {}),
+                }
+
+            elif action == "techniques":
+                await ensure_techniques_loaded(self.tenant_id)
+                techniques, total = await list_techniques(
+                    tenant_id=self.tenant_id, limit=limit, offset=0,
+                )
+                items = [
+                    {
+                        "technique_id": t.get("technique_id", ""),
+                        "name": t.get("name", ""),
+                        "tactic": t.get("tactic", ""),
+                        "coverage_status": t.get("coverage_status", ""),
+                        "mapped_categories": t.get("mapped_categories", []),
+                    }
+                    for t in techniques
+                ]
+                return {"type": "techniques", "techniques": items, "total": total}
+
+            else:  # items
+                items_list, total = await list_items(
+                    tenant_id=self.tenant_id,
+                    severity=severity,
+                    limit=limit,
+                    offset=0,
+                )
+                items = [
+                    {
+                        "id": i.get("id", ""),
+                        "title": i.get("title", ""),
+                        "severity": i.get("severity", ""),
+                        "status": i.get("status", ""),
+                        "attack_categories": i.get("attack_categories", []),
+                        "payloads_generated": i.get("payloads_generated", 0),
+                        "created_at": i.get("created_at", ""),
+                    }
+                    for i in items_list
+                ]
+                return {"type": "items", "items": items, "total": total}
+        except Exception as exc:
+            logger.warning("get_threat_intel failed: %s", exc)
+            return {"error": str(exc)}
+
+    # ------------------------------------------------------------------
+    # CI/CD tools
+    # ------------------------------------------------------------------
+
+    async def _tool_list_cicd_integrations(
+        self,
+        include_builds: bool = True,
+        limit: int = 10,
+    ) -> dict[str, Any]:
+        """List CI/CD integrations and recent builds."""
+        try:
+            from mass.api.services.cicd_integration import (
+                list_integrations,
+                list_builds,
+            )
+
+            integrations, int_total = await list_integrations(
+                tenant_id=self.tenant_id, limit=limit, offset=0,
+            )
+            int_items = [
+                {
+                    "id": i.get("id", ""),
+                    "provider": i.get("provider", ""),
+                    "repository": i.get("repository", ""),
+                    "is_active": i.get("is_active", False),
+                    "quality_gate_threshold": i.get("quality_gate_threshold", ""),
+                    "total_scans": i.get("total_scans", 0),
+                    "last_scan_at": i.get("last_scan_at", ""),
+                }
+                for i in integrations
+            ]
+
+            result: dict[str, Any] = {
+                "integrations": int_items,
+                "integrations_total": int_total,
+            }
+
+            if include_builds:
+                builds, build_total = await list_builds(
+                    tenant_id=self.tenant_id, limit=limit, offset=0,
+                )
+                result["builds"] = [
+                    {
+                        "id": b.get("id", ""),
+                        "provider": b.get("provider", ""),
+                        "repository": b.get("repository", ""),
+                        "branch": b.get("branch", ""),
+                        "commit_sha": (b.get("commit_sha", ""))[:12],
+                        "gate_verdict": b.get("gate_verdict", ""),
+                        "status": b.get("status", ""),
+                        "created_at": b.get("created_at", ""),
+                    }
+                    for b in builds
+                ]
+                result["builds_total"] = build_total
+
+            return result
+        except Exception as exc:
+            logger.warning("list_cicd_integrations failed: %s", exc)
+            return {"error": str(exc), "integrations": []}
+
+    # ------------------------------------------------------------------
+    # Cross-Model tools
+    # ------------------------------------------------------------------
+
+    async def _tool_get_cross_model_results(
+        self,
+        comparison_id: str | None = None,
+        limit: int = 5,
+    ) -> dict[str, Any]:
+        """Get cross-model comparison results."""
+        try:
+            from mass.api.services.cross_model import (
+                get_comparison,
+                list_comparisons,
+            )
+
+            if comparison_id:
+                comp = await get_comparison(comparison_id)
+                if not comp:
+                    return {"error": f"Comparison not found: {comparison_id}"}
+
+                # Concise summary of one comparison
+                return {
+                    "id": comp.get("id", ""),
+                    "name": comp.get("name", ""),
+                    "status": comp.get("status", ""),
+                    "models_count": comp.get("models_count", 0),
+                    "categories": comp.get("categories", []),
+                    "total_findings": comp.get("total_findings", 0),
+                    "duration_seconds": comp.get("duration_seconds", 0),
+                    "ranking": [
+                        {
+                            "rank": r.get("rank", 0),
+                            "label": r.get("label", ""),
+                            "security_score": r.get("security_score", 0),
+                            "vulnerability_rate": r.get("vulnerability_rate", 0),
+                            "total_vulnerabilities": r.get("total_vulnerabilities", 0),
+                        }
+                        for r in comp.get("overall_ranking", [])
+                    ],
+                    "category_comparisons": [
+                        {
+                            "category": c.get("category", ""),
+                            "most_vulnerable": c.get("most_vulnerable", ""),
+                            "most_resilient": c.get("most_resilient", ""),
+                        }
+                        for c in comp.get("category_comparisons", [])
+                    ],
+                }
+
+            # List recent comparisons
+            comparisons, total = await list_comparisons(
+                tenant_id=self.tenant_id, limit=limit, offset=0,
+            )
+            items = [
+                {
+                    "id": c.get("id", ""),
+                    "name": c.get("name", ""),
+                    "status": c.get("status", ""),
+                    "models_count": c.get("models_count", 0),
+                    "total_findings": c.get("total_findings", 0),
+                    "created_at": c.get("created_at", ""),
+                }
+                for c in comparisons
+            ]
+            return {"comparisons": items, "total": total}
+        except Exception as exc:
+            logger.warning("get_cross_model_results failed: %s", exc)
+            return {"error": str(exc)}
+
+    # ------------------------------------------------------------------
+    # Explainability tools
+    # ------------------------------------------------------------------
+
+    async def _tool_explain_finding_ai(
+        self,
+        finding_id: str,
+        audience: str = "developer",
+    ) -> dict[str, Any]:
+        """Get AI-generated explanation of a finding."""
+        # First fetch the finding from DB
+        stmt = (
+            select(Finding)
+            .join(Scan, Finding.scan_id == Scan.id)
+            .where(Scan.tenant_id == self.tenant_id)
+            .where(Finding.id == finding_id)
+        )
+        result = await self.session.execute(stmt)
+        f = result.scalar_one_or_none()
+        if not f:
+            return {"error": f"Finding not found: {finding_id}"}
+
+        try:
+            from mass.api.services.explainability import explain_finding
+
+            # Build finding dict for the explainability service
+            finding_data = {
+                "id": f.id,
+                "title": f.title,
+                "description": f.description or "",
+                "severity": f.severity,
+                "category": f.category or "",
+                "evidence": f.evidence or "",
+                "remediation": f.remediation or "",
+                "code_snippet": f.code_snippet or "",
+                "file_path": f.file_path or "",
+                "line_number": f.line_number,
+                "cwe_id": f.cwe_id or "",
+                "owasp_category": f.owasp_category or "",
+                "mitre_technique": f.mitre_technique or "",
+            }
+
+            explanation = await explain_finding(
+                finding=finding_data,
+                audience=audience,
+            )
+
+            # Return concise explanation
+            return {
+                "finding_id": finding_id,
+                "title": explanation.get("title", f.title),
+                "severity": explanation.get("severity", f.severity),
+                "audience": audience,
+                "summary": explanation.get("summary", ""),
+                "explanation": explanation.get("explanation", ""),
+                "business_impact": explanation.get("business_impact", ""),
+                "risk_description": explanation.get("risk_description", ""),
+                "attack_chain_narrative": explanation.get("attack_chain_narrative", ""),
+                "remediation_summary": explanation.get("remediation_summary", ""),
+                "remediation_steps": explanation.get("remediation_steps", []),
+                "code_example": explanation.get("code_example", ""),
+                "estimated_effort": explanation.get("estimated_effort", ""),
+                "compliance_context": explanation.get("compliance_context", []),
+            }
+        except Exception as exc:
+            logger.warning("explain_finding_ai failed: %s", exc)
+            # Fall back to basic finding details
+            return {
+                "finding_id": finding_id,
+                "title": f.title,
+                "severity": f.severity,
+                "description": f.description or "",
+                "remediation": f.remediation or "",
+                "error": f"AI explanation unavailable: {exc}",
+            }

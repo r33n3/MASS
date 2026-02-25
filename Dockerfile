@@ -14,6 +14,8 @@ RUN apt-get update && apt-get install -y \
     postgresql-client \
     nodejs \
     npm \
+    pkg-config \
+    libcairo2-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -27,7 +29,7 @@ FROM base as development
 COPY pyproject.toml README.md ./
 
 # Install dependencies (including dev dependencies and model providers)
-RUN pip install -e ".[dev,providers]"
+RUN pip install -e ".[dev,providers,reporting]"
 
 # Copy application code
 COPY . .
@@ -47,7 +49,7 @@ FROM base as production
 COPY pyproject.toml README.md ./
 
 # Install production dependencies with model providers
-RUN pip install ".[providers]"
+RUN pip install ".[providers,reporting]"
 
 # Copy application code (exclude dev files)
 COPY src ./src

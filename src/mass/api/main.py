@@ -42,6 +42,15 @@ from mass.api.routes import (
     guardrails_policies,
     sandbox,
     settings as settings_routes,
+    cicd,
+    integrations,
+    threat_intel,
+    supply_chain,
+    privacy,
+    explainability,
+    cross_model,
+    cloud,
+    browser,
 )
 
 
@@ -61,7 +70,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     logger = logging.getLogger(__name__)
 
-    # Startup
+    # Startup (platform settings already loaded at module level)
     settings = get_settings()
     app.state.settings = settings
 
@@ -176,15 +185,6 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # Configure CORS
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=settings.api_cors_origins,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-
     # Add request logging middleware
     app.add_middleware(RequestLoggingMiddleware)
 
@@ -195,6 +195,17 @@ def create_app() -> FastAPI:
     # Add authentication middleware (extracts keys; enforces in production)
     from mass.api.middleware.auth import AuthMiddleware
     app.add_middleware(AuthMiddleware)
+
+    # CORS must be the OUTERMOST middleware (added last in Starlette)
+    # so that CORS headers are added to ALL responses — including 429
+    # rate-limit and 401 auth errors that short-circuit inner middleware.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.api_cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     # Setup exception handlers
     setup_exception_handlers(app)
@@ -228,6 +239,15 @@ def create_app() -> FastAPI:
     app.include_router(ollama.router, prefix=f"{api_prefix}/ollama", tags=["Ollama"])
     app.include_router(guardrails_policies.router, prefix=f"{api_prefix}/guardrails-policies", tags=["Guardrails & Policies"])
     app.include_router(settings_routes.router, prefix=f"{api_prefix}/settings", tags=["Settings"])
+    app.include_router(cicd.router, prefix=f"{api_prefix}/cicd", tags=["CI/CD"])
+    app.include_router(integrations.router, prefix=f"{api_prefix}/integrations", tags=["Integrations"])
+    app.include_router(threat_intel.router, prefix=f"{api_prefix}/threat-intel", tags=["Threat Intelligence"])
+    app.include_router(supply_chain.router, prefix=f"{api_prefix}/supply-chain", tags=["Supply Chain"])
+    app.include_router(privacy.router, prefix=f"{api_prefix}/privacy", tags=["Privacy"])
+    app.include_router(explainability.router, prefix=f"{api_prefix}/explain", tags=["Explainability"])
+    app.include_router(cross_model.router, prefix=f"{api_prefix}/cross-model", tags=["Cross-Model"])
+    app.include_router(cloud.router, prefix=f"{api_prefix}/cloud", tags=["Cloud-Native"])
+    app.include_router(browser.router, prefix=f"{api_prefix}/browser", tags=["Browser Agent"])
 
     # WebSocket for real-time scan updates
     from mass.dashboard.websocket import router as ws_router

@@ -170,6 +170,8 @@ class JobExecutor:
         self._handlers[JobType.MCP_ANALYSIS] = self._handle_mcp_analysis
         self._handlers[JobType.ATTACK_SURFACE] = self._handle_attack_surface
         self._handlers[JobType.WORKFLOW_ANALYSIS] = self._handle_workflow_analysis
+        self._handlers[JobType.RAG_ANALYSIS] = self._handle_rag_analysis
+        self._handlers[JobType.CODE_SECURITY_AUDIT] = self._handle_code_security_audit
         self._handlers[JobType.MODEL_INTERROGATION] = self._handle_model_interrogation
 
     def register_handler(self, job_type: JobType, handler: JobHandler) -> None:
@@ -429,6 +431,35 @@ class JobExecutor:
         return _map.get(severity, severity)
 
     @staticmethod
+    def _cap_severity_by_confidence(
+        severity: "Severity",
+        confidence: float,
+        threshold: float = 0.5,
+    ) -> "Severity":
+        """Cap severity based on confidence score.
+
+        Findings with confidence below the threshold cannot exceed
+        MEDIUM severity, preventing alert fatigue from unvalidated
+        static pattern matches.
+        """
+        from mass.core.types import Severity
+
+        if confidence >= threshold:
+            return severity
+
+        _SEV_RANK = {
+            Severity.CRITICAL: 0,
+            Severity.HIGH: 1,
+            Severity.MEDIUM: 2,
+            Severity.LOW: 3,
+            Severity.INFO: 4,
+        }
+        cap = Severity.MEDIUM
+        if _SEV_RANK.get(severity, 4) < _SEV_RANK[cap]:
+            return cap
+        return severity
+
+    @staticmethod
     def _convert_context_finding(ctx_finding: Any) -> Finding:
         """Convert ContextFinding to core Finding.
 
@@ -439,7 +470,10 @@ class JobExecutor:
         from mass.core.findings import Evidence, Remediation
         from mass.core.types import AttackCategory, ComponentType, ConfidenceLevel
 
+        confidence = 0.4  # Static pattern match confidence
         downgraded = JobExecutor._downgrade_severity(ctx_finding.severity)
+        pre_cap = downgraded
+        downgraded = JobExecutor._cap_severity_by_confidence(downgraded, confidence)
 
         # Map context risk categories to OWASP LLM attack categories
         _CTX_CATEGORY = {
@@ -493,7 +527,7 @@ class JobExecutor:
                 f"confirmed via model interaction."
             ),
             severity=downgraded,
-            confidence=0.4,
+            confidence=confidence,
             category=attack_cat,
             component_type=ComponentType.CONTEXT,
             component_name=ctx_finding.pattern_name or "context",
@@ -512,6 +546,7 @@ class JobExecutor:
             metadata={
                 "confidence_level": ConfidenceLevel.STATIC_MATCH.value,
                 "original_severity": ctx_finding.severity.value if hasattr(ctx_finding.severity, "value") else str(ctx_finding.severity),
+                **({"pre_cap_severity": pre_cap.value} if pre_cap != downgraded else {}),
             },
         )
 
@@ -2036,6 +2071,183 @@ class JobExecutor:
 
         return result
 
+    @staticmethod
+    def _convert_rag_finding(rag_finding: Any) -> Finding:
+        """Convert RAGFinding to core Finding."""
+        from mass.core.findings import Evidence, Remediation
+        from mass.core.types import AttackCategory, ComponentType
+
+        _RAG_CATEGORY = {
+            "unvalidated_ingestion": AttackCategory.DATA_MODEL_POISONING,
+            "unauthenticated_vectordb": AttackCategory.SENSITIVE_INFO,
+            "no_access_control": AttackCategory.DATA_LEAKAGE,
+            "unsigned_embedding_model": AttackCategory.SUPPLY_CHAIN,
+            "no_relevance_filtering": AttackCategory.MISINFORMATION,
+            "unsanitized_retrieval": AttackCategory.PROMPT_INJECTION,
+            "hardcoded_connection": AttackCategory.SECRETS_EXPOSURE,
+            "insecure_chunking": AttackCategory.UNBOUNDED_CONSUMPTION,
+        }
+        cat_key = rag_finding.category.value if hasattr(rag_finding.category, "value") else str(rag_finding.category)
+        attack_cat = _RAG_CATEGORY.get(cat_key, AttackCategory.DATA_MODEL_POISONING)
+
+        evidence_items: list[Evidence] = []
+        if rag_finding.code_snippet:
+            evidence_items.append(Evidence(
+                type="code",
+                content=rag_finding.code_snippet,
+                source_file=rag_finding.file_path,
+                source_line=rag_finding.line_number,
+                metadata={"matched_pattern": rag_finding.matched_pattern},
+            ))
+
+        return Finding(
+            title=f"RAG Pipeline: {rag_finding.title}",
+            description=rag_finding.description,
+            severity=rag_finding.severity,
+            category=attack_cat,
+            component_type=ComponentType.CODE,
+            component_name=rag_finding.pattern_id,
+            file_path=rag_finding.file_path,
+            line_number=rag_finding.line_number,
+            evidence=evidence_items,
+            remediation=Remediation(
+                summary=rag_finding.remediation or "Review RAG pipeline for security issues",
+                steps=["Audit RAG pipeline configuration and data flow"],
+            ) if rag_finding.remediation else None,
+            owasp_ids=["LLM06"],
+            tags=["rag", cat_key],
+            metadata={"confidence_level": "heuristic"},
+        )
+
+    def _handle_rag_analysis(
+        self, job: PlannedJob, context: dict[str, Any]
+    ) -> JobResult:
+        """Handle RAG pipeline analysis using shared file index."""
+        from pathlib import Path as PathLib
+        from mass.analyzers.rag.analyzer import RAGAnalyzer
+        from mass.analyzers.rag.patterns import RAG_INDICATOR_PATTERNS
+
+        result = JobResult(job_id=job.id, job_type=job.job_type)
+        result.mark_started()
+
+        try:
+            path = context.get("deployment_path")
+            file_index = context.get("file_index")
+            if not path:
+                result.mark_completed()
+                return result
+
+            analyzer = RAGAnalyzer()
+            root = PathLib(path)
+
+            if file_index:
+                rag_files = self._filter_files(
+                    file_index,
+                    extensions={".py"},
+                    name_patterns=RAG_INDICATOR_PATTERNS,
+                )
+            else:
+                rag_files = [str(f) for f in root.rglob("*.py")]
+
+            result.output["rag_files_found"] = len(rag_files)
+
+            for rel_path in rag_files:
+                abs_path = root / rel_path if file_index else PathLib(rel_path)
+                try:
+                    file_result = analyzer.analyze_file(abs_path)
+                    for rag_finding in file_result.findings:
+                        finding = self._convert_rag_finding(rag_finding)
+                        result.add_finding(finding)
+                except Exception:
+                    result.output.setdefault("errors", []).append(
+                        f"Failed to analyze: {rel_path}"
+                    )
+
+            result.items_processed = len(rag_files)
+            result.mark_completed()
+
+        except Exception as e:
+            result.mark_failed(str(e))
+
+        return result
+
+    def _handle_code_security_audit(
+        self, job: PlannedJob, context: dict[str, Any]
+    ) -> JobResult:
+        """Handle code security audit job.
+
+        Runs Phase A (static grep) and optionally Phase B (LLM verification)
+        to find application security vulnerabilities in code.
+        """
+        from pathlib import Path as PathLib
+        from mass.analyzers.code_security.audit import AuditConfig, CodeSecurityAuditor
+        from mass.core.types import Severity as SevEnum
+
+        result = JobResult(job_id=job.id, job_type=job.job_type)
+        result.mark_started()
+
+        try:
+            path = context.get("deployment_path")
+            if not path:
+                result.mark_completed()
+                result.output["message"] = "No deployment path provided"
+                return result
+
+            # Build config from job config + context
+            opts = dict(job.config)
+            llm_verification = opts.pop("llm_verification", True)
+
+            sev_threshold_str = opts.pop("llm_severity_threshold", "medium")
+            sev_map = {
+                "critical": SevEnum.CRITICAL,
+                "high": SevEnum.HIGH,
+                "medium": SevEnum.MEDIUM,
+                "low": SevEnum.LOW,
+            }
+            sev_threshold = sev_map.get(sev_threshold_str, SevEnum.MEDIUM)
+
+            config = AuditConfig(
+                llm_verification=llm_verification,
+                llm_severity_threshold=sev_threshold,
+                max_candidates_for_llm=int(opts.pop("max_candidates_for_llm", 50)),
+                min_confidence=float(opts.pop("min_confidence", 0.7)),
+                provider=context.get("llm_provider", opts.pop("provider", "ollama")),
+                model=context.get("llm_model", opts.pop("model", None)),
+                api_key=context.get("llm_api_key", opts.pop("api_key", None)),
+                endpoint=context.get("llm_endpoint", opts.pop("endpoint", None)),
+            )
+
+            architecture_map = context.get("_architecture_map")
+
+            auditor = CodeSecurityAuditor()
+
+            audit_result = auditor.audit_sync(
+                PathLib(path),
+                architecture_map=architecture_map,
+                config=config,
+            )
+
+            # Add findings to result
+            for finding in audit_result.findings:
+                result.add_finding(finding)
+
+            result.output["candidates_found"] = audit_result.candidates_found
+            result.output["candidates_verified"] = audit_result.candidates_verified
+            result.output["findings_confirmed"] = audit_result.findings_confirmed
+            result.output["findings_static_only"] = audit_result.findings_static_only
+            result.output["duration_phase_a"] = audit_result.duration_phase_a
+            result.output["duration_phase_b"] = audit_result.duration_phase_b
+            if audit_result.errors:
+                result.output["errors"] = audit_result.errors
+
+            result.items_processed = audit_result.candidates_found
+            result.mark_completed()
+
+        except Exception as e:
+            result.mark_failed(str(e))
+
+        return result
+
     def _handle_model_interrogation(
         self, job: PlannedJob, context: dict[str, Any]
     ) -> JobResult:
@@ -2114,6 +2326,8 @@ class JobExecutor:
                     "max_concurrent_prompts",
                     _get_probe_defaults()[1],
                 )),
+                adaptive_rounds=int(job_cfg.get("adaptive_rounds", 0)),
+                adaptive_max_mutations=int(job_cfg.get("adaptive_max_mutations", 5)),
             )
 
             # Pass remediation cache for enriched finding guidance

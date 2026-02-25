@@ -27,6 +27,8 @@ class JobType(str, Enum):
     WORKFLOW_ANALYSIS = "workflow_analysis"
     MODEL_INTERROGATION = "model_interrogation"
     ARCHITECTURE_ANALYSIS = "architecture_analysis"
+    RAG_ANALYSIS = "rag_analysis"
+    CODE_SECURITY_AUDIT = "code_security_audit"
 
 
 @dataclass
@@ -152,6 +154,7 @@ class DeploymentInfo:
     has_infrastructure: bool = False
     has_secrets_risk: bool = True  # Always check for secrets
     has_model_endpoint: bool = False  # Remote model API configured
+    has_rag_pipeline: bool = False  # RAG/vector DB code detected
 
     # Detected environment (populated after discovery phase)
     cloud_provider: str | None = None
@@ -327,6 +330,20 @@ class ScanPlanner:
                 plan.add_job(job)
                 static_analysis_ids.append(job.id)
 
+        # RAG pipeline analysis
+        if self.profile.rag_analyzer.enabled and deployment.has_rag_pipeline:
+            job = PlannedJob(
+                job_type=JobType.RAG_ANALYSIS,
+                name="RAG Pipeline Analysis",
+                description="Analyze RAG pipeline code for security issues",
+                priority=self.profile.rag_analyzer.priority,
+                timeout_seconds=self.profile.rag_analyzer.timeout_seconds,
+                depends_on=depends,
+                config=self.profile.rag_analyzer.options,
+            )
+            plan.add_job(job)
+            static_analysis_ids.append(job.id)
+
         # Workflow analysis
         if self.profile.workflow_analyzer.enabled and deployment.has_workflows:
             for workflow_file in deployment.workflow_files or [None]:
@@ -387,6 +404,20 @@ class ScanPlanner:
                     if job.job_type == JobType.ATTACK_SURFACE:
                         job.config["architecture_entry_points"] = arch["entry_points"]
                         job.config["architecture_pattern"] = arch.get("pattern", "unknown")
+
+        # 2c. Code security audit (depends on deployment scan + architecture)
+        if self.profile.code_security_analyzer.enabled:
+            job = PlannedJob(
+                job_type=JobType.CODE_SECURITY_AUDIT,
+                name="Code Security Audit",
+                description="Static grep + LLM verification for application security vulnerabilities",
+                priority=self.profile.code_security_analyzer.priority,
+                timeout_seconds=self.profile.code_security_analyzer.timeout_seconds,
+                depends_on=depends,
+                config=self.profile.code_security_analyzer.options,
+            )
+            plan.add_job(job)
+            static_analysis_ids.append(job.id)
 
         # 3. Attack surface analysis (depends on static analysis)
         if self.profile.attack_surface_analyzer.enabled:

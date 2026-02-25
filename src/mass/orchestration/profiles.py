@@ -49,6 +49,8 @@ class ScanProfile:
     mcp_analyzer: AnalyzerConfig = field(default_factory=AnalyzerConfig)
     attack_surface_analyzer: AnalyzerConfig = field(default_factory=AnalyzerConfig)
     workflow_analyzer: AnalyzerConfig = field(default_factory=AnalyzerConfig)
+    rag_analyzer: AnalyzerConfig = field(default_factory=AnalyzerConfig)
+    code_security_analyzer: AnalyzerConfig = field(default_factory=AnalyzerConfig)
     model_interrogator: AnalyzerConfig = field(default_factory=AnalyzerConfig)
 
     # Global settings
@@ -68,6 +70,8 @@ class ScanProfile:
             ("mcp_analyzer", self.mcp_analyzer),
             ("attack_surface_analyzer", self.attack_surface_analyzer),
             ("workflow_analyzer", self.workflow_analyzer),
+            ("rag_analyzer", self.rag_analyzer),
+            ("code_security_analyzer", self.code_security_analyzer),
             ("model_interrogator", self.model_interrogator),
         ]
         enabled = [(name, cfg) for name, cfg in analyzers if cfg.enabled]
@@ -101,6 +105,13 @@ QUICK_PROFILE = ScanProfile(
     mcp_analyzer=AnalyzerConfig(enabled=False),
     attack_surface_analyzer=AnalyzerConfig(enabled=False),
     workflow_analyzer=AnalyzerConfig(enabled=False),
+    rag_analyzer=AnalyzerConfig(enabled=False),
+    code_security_analyzer=AnalyzerConfig(
+        enabled=True,
+        priority=25,
+        timeout_seconds=120,
+        options={"llm_verification": False},
+    ),
     model_interrogator=AnalyzerConfig(
         enabled=True,
         priority=50,
@@ -125,6 +136,13 @@ STANDARD_PROFILE = ScanProfile(
     mcp_analyzer=AnalyzerConfig(enabled=True, priority=60),
     attack_surface_analyzer=AnalyzerConfig(enabled=True, priority=70),
     workflow_analyzer=AnalyzerConfig(enabled=True, priority=80),
+    rag_analyzer=AnalyzerConfig(enabled=True, priority=85),
+    code_security_analyzer=AnalyzerConfig(
+        enabled=True,
+        priority=25,
+        timeout_seconds=300,
+        options={"llm_verification": True, "llm_severity_threshold": "high"},
+    ),
     model_interrogator=AnalyzerConfig(enabled=False),
     max_concurrent_jobs=4,
     total_timeout_seconds=900,
@@ -144,11 +162,18 @@ COMPREHENSIVE_PROFILE = ScanProfile(
     mcp_analyzer=AnalyzerConfig(enabled=True, priority=60),
     attack_surface_analyzer=AnalyzerConfig(enabled=True, priority=70),
     workflow_analyzer=AnalyzerConfig(enabled=True, priority=80),
+    rag_analyzer=AnalyzerConfig(enabled=True, priority=85),
+    code_security_analyzer=AnalyzerConfig(
+        enabled=True,
+        priority=25,
+        timeout_seconds=600,
+        options={"llm_verification": True, "llm_severity_threshold": "medium"},
+    ),
     model_interrogator=AnalyzerConfig(
         enabled=True,
         priority=90,
         timeout_seconds=600,
-        options={"probe_categories": ["jailbreak", "prompt_injection", "sensitive_info"], "max_concurrent_probes": 4, "max_concurrent_prompts": 3},
+        options={"probe_categories": ["jailbreak", "prompt_injection", "sensitive_info"], "max_concurrent_probes": 4, "max_concurrent_prompts": 3, "adaptive_rounds": 2, "adaptive_max_mutations": 5},
     ),
     max_concurrent_jobs=4,
     total_timeout_seconds=1800,
@@ -214,6 +239,8 @@ def create_custom_profile(
         "mcp_analyzer",
         "attack_surface_analyzer",
         "workflow_analyzer",
+        "rag_analyzer",
+        "code_security_analyzer",
         "model_interrogator",
     ]
 

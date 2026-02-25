@@ -60,6 +60,44 @@ class EventType(str, Enum):
     WEBHOOK_DISPATCHED = "webhook.dispatched"
     WEBHOOK_FAILED = "webhook.failed"
 
+    # CI/CD events
+    CICD_WEBHOOK_RECEIVED = "cicd.webhook_received"
+    CICD_SCAN_TRIGGERED = "cicd.scan_triggered"
+    CICD_GATE_EVALUATED = "cicd.gate_evaluated"
+
+    # Issue generation events
+    ISSUE_EXPORTED = "issue.exported"
+    ISSUE_EXPORT_FAILED = "issue.export_failed"
+
+    # Threat intelligence events
+    THREAT_ITEM_CREATED = "threat.item_created"
+    THREAT_ANALYZED = "threat.analyzed"
+    THREAT_PAYLOADS_GENERATED = "threat.payloads_generated"
+
+    # Supply chain verification events
+    SUPPLY_CHAIN_VERIFIED = "supply_chain.verified"
+    SUPPLY_CHAIN_SCAN_COMPLETED = "supply_chain.scan_completed"
+    SUPPLY_CHAIN_VULNERABILITY = "supply_chain.vulnerability_found"
+
+    # Privacy risk analysis events
+    PRIVACY_ASSESSMENT_COMPLETED = "privacy.assessment_completed"
+    PRIVACY_PII_DETECTED = "privacy.pii_detected"
+    PRIVACY_COMPLIANCE_CHECK = "privacy.compliance_check"
+
+    # Guardrail events
+    GUARDRAIL_GENERATED = "guardrail.generated"
+
+    # Explainability events
+    EXPLANATION_GENERATED = "explain.generated"
+    REMEDIATION_PLAN_GENERATED = "explain.remediation_plan"
+
+    # Cross-model events
+    CROSS_MODEL_COMPLETED = "cross_model.completed"
+
+    # Cloud-native events
+    CLOUD_DISCOVERY_COMPLETED = "cloud.discovery_completed"
+    CLOUD_ASSESSMENT_COMPLETED = "cloud.assessment_completed"
+
     # Audit events
     API_REQUEST = "api.request"
     AUTH_SUCCESS = "auth.success"

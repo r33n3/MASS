@@ -104,3 +104,51 @@ class FindingUpdate(BaseModel):
     suppressed: bool | None = Field(default=None, description="Suppress from reports")
     acknowledged: bool | None = Field(default=None, description="Acknowledge the finding")
     tags: list[str] | None = Field(default=None, description="Update tags")
+
+
+# -- Grouped / deduplicated finding schemas --
+
+
+class FindingLocation(BaseModel):
+    """A single occurrence location within a grouped finding."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    file_path: str | None = Field(default=None, description="File path")
+    line_number: int | None = Field(default=None, description="Line number")
+
+
+class GroupedFindingResponse(BaseModel):
+    """A finding aggregating multiple occurrences with the same category+title."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(..., description="Representative finding ID")
+    scan_id: str = Field(..., description="Scan ID")
+    title: str = Field(..., description="Finding title")
+    description: str = Field(..., description="Description from representative finding")
+    severity: str = Field(..., description="Highest severity in group")
+    category: str = Field(..., description="Attack category")
+    component_type: str = Field(..., description="Component type")
+    component_name: str = Field(..., description="Component name")
+    confidence: float = Field(default=1.0, description="Highest confidence in group")
+    compliance: ComplianceMapping = Field(
+        default_factory=ComplianceMapping,
+        description="Compliance mappings from representative",
+    )
+    remediation: str | None = Field(default=None, description="Remediation guidance")
+    tags: list[str] = Field(default_factory=list, description="Tags from representative")
+    occurrence_count: int = Field(..., description="Number of occurrences")
+    locations: list[FindingLocation] = Field(
+        default_factory=list,
+        description="All file_path:line_number occurrences",
+    )
+
+
+class GroupedFindingListResponse(BaseModel):
+    """List of grouped findings."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[GroupedFindingResponse] = Field(..., description="Grouped findings")
+    pagination: PaginationMeta = Field(..., description="Pagination metadata")

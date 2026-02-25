@@ -5,6 +5,7 @@ AI framework detection, and common filesystem walking patterns used
 across scanning, discovery, and target enumeration.
 """
 
+import fnmatch
 import os
 from pathlib import Path
 from typing import Any
@@ -142,6 +143,50 @@ def walk_with_exclusions(
             if max_files and len(files) >= max_files:
                 return files
     return files
+
+
+def filter_by_patterns(
+    files: list[str],
+    exclude_patterns: list[str],
+) -> list[str]:
+    """Filter out files matching any exclude pattern.
+
+    Supports fnmatch glob syntax (``docs/**``, ``*.md``) and exact
+    path matching.  Trailing ``/`` on a pattern is normalized to
+    ``/**`` so that ``tests/`` excludes the entire directory.
+
+    Args:
+        files: Relative file paths (forward-slash separated).
+        exclude_patterns: Glob patterns or exact paths to exclude.
+
+    Returns:
+        Files that do not match any exclude pattern.
+    """
+    if not exclude_patterns:
+        return files
+
+    # Normalize patterns once
+    normalized: list[str] = []
+    exact: set[str] = set()
+    for pat in exclude_patterns:
+        p = pat.replace("\\", "/").rstrip("/")
+        # Bare directory name or trailing-slash → dir/**
+        if "/" not in p and "*" not in p and "?" not in p:
+            normalized.append(p + "/**")
+        elif pat.endswith("/"):
+            normalized.append(p + "/**")
+        else:
+            normalized.append(p)
+        # Also keep exact match for simple paths
+        exact.add(p)
+
+    def _excluded(filepath: str) -> bool:
+        fp = filepath.replace("\\", "/")
+        if fp in exact:
+            return True
+        return any(fnmatch.fnmatch(fp, pat) for pat in normalized)
+
+    return [f for f in files if not _excluded(f)]
 
 
 def scan_directory_quick(entry: Path) -> dict[str, Any] | None:

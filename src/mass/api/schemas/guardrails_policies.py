@@ -2,6 +2,8 @@
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from mass.api.schemas.common import PaginationMeta
+
 
 class FindingSummaryItem(BaseModel):
     """Condensed finding for guardrail matching."""
@@ -73,6 +75,10 @@ class GuardrailItem(BaseModel):
     implementation_steps: list[str] = Field(default_factory=list)
     code_examples: dict[str, str] = Field(default_factory=dict)
     configuration_examples: dict[str, str] = Field(default_factory=dict)
+    platform_configs: dict[str, str] = Field(
+        default_factory=dict,
+        description="Platform-specific YAML configs (e.g. aws_bedrock, litellm)",
+    )
     mitigates: list[str] = Field(default_factory=list)
     compliance: list[str] = Field(default_factory=list)
     effort: str = "medium"
@@ -81,18 +87,41 @@ class GuardrailItem(BaseModel):
 
 
 class PolicyItem(BaseModel):
-    """An organizational policy recommendation."""
+    """An organizational policy recommendation aligned to AI governance frameworks."""
 
     model_config = ConfigDict(extra="ignore")
 
     name: str = ""
     owner_group: str = "Security"
     description: str = ""
+    policy_category: str = Field(
+        default="governance",
+        description=(
+            "Category: governance, risk_management, compliance, "
+            "technical_controls, incident_response, data_protection, "
+            "model_lifecycle, monitoring"
+        ),
+    )
     assets_covered: list[str] = Field(default_factory=list)
     violation_severity: str = "medium"
     original_severity: str = ""
     severity_adjusted: bool = False
     remediation_actions: list[str] = Field(default_factory=list)
+    framework_mappings: dict[str, list[str]] = Field(
+        default_factory=dict,
+        description=(
+            "Maps framework name to control IDs. Keys: nist_ai_rmf, "
+            "iso_42001, eu_ai_act, owasp_llm_top10, mitre_atlas"
+        ),
+    )
+    review_frequency: str = Field(
+        default="quarterly",
+        description="How often this policy should be reviewed: quarterly, semi_annual, annual",
+    )
+    implementation_priority: str = Field(
+        default="short_term",
+        description="When to implement: immediate, short_term, medium_term, long_term",
+    )
     related_findings: list[str] = Field(default_factory=list)
     source: str = "ai_generated"
 
@@ -100,8 +129,10 @@ class PolicyItem(BaseModel):
 class GenerateGuardrailsResponse(BaseModel):
     """Response with guardrails and policies."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
+    id: str | None = Field(default=None, description="Persisted guardrail set ID")
+    scan_id: str | None = Field(default=None, description="Associated scan ID")
     registry_guardrails: list[GuardrailItem] = Field(default_factory=list)
     ai_guardrails: list[GuardrailItem] = Field(default_factory=list)
     policies: list[PolicyItem] = Field(default_factory=list)
@@ -111,3 +142,13 @@ class GenerateGuardrailsResponse(BaseModel):
     risk_multiplier: float | None = None
     risk_factors: list[str] | None = None
     risk_level: str | None = None
+    created_at: str | None = None
+
+
+class GuardrailSetListResponse(BaseModel):
+    """Paginated list of persisted guardrail sets."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[GenerateGuardrailsResponse] = Field(default_factory=list)
+    pagination: PaginationMeta

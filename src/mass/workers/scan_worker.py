@@ -41,9 +41,12 @@ async def handle_full_scan(job: Job) -> dict[str, Any] | None:
     - Broadcasting WebSocket updates
     - Updating scan status on completion/failure
     """
+    from mass.core.metrics import METRICS
+
     scan_id = job.payload.get("scan_id")
     if not scan_id:
         logger.error("full_scan job missing scan_id in payload")
+        METRICS.inc("mass_worker_jobs_failed", help_text="Worker jobs failed")
         return {"status": "failed", "error": "missing scan_id"}
 
     logger.info("Processing scan %s (job %s)", scan_id, job.id)
@@ -51,7 +54,12 @@ async def handle_full_scan(job: Job) -> dict[str, Any] | None:
     from mass.api.services.scan_execution import ScanExecutionService
 
     service = ScanExecutionService()
-    await service.execute_scan(scan_id)
+    try:
+        await service.execute_scan(scan_id)
+        METRICS.inc("mass_worker_jobs_processed", help_text="Worker jobs processed")
+    except Exception:
+        METRICS.inc("mass_worker_jobs_failed", help_text="Worker jobs failed")
+        raise
 
     logger.info("Scan %s completed (job %s)", scan_id, job.id)
     return {"status": "completed", "scan_id": scan_id}
@@ -59,6 +67,10 @@ async def handle_full_scan(job: Job) -> dict[str, Any] | None:
 
 async def main() -> None:
     """Main worker loop."""
+    # Load persisted platform settings before MassSettings reads env vars
+    from mass.api.routes.settings import load_platform_settings_into_env
+    load_platform_settings_into_env()
+
     settings = get_settings()
 
     # Configuration from environment

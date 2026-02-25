@@ -10,16 +10,18 @@ import logging
 import os
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, status
 
-from mass.api.dependencies import CurrentTenantDep
+from mass.api.dependencies import CurrentTenantDep, GuardrailSetRepo, PaginationDep
 from mass.api.schemas.guardrails_policies import (
     GenerateGuardrailsRequest,
     GenerateGuardrailsResponse,
     GuardrailItem,
+    GuardrailSetListResponse,
     PolicyItem,
     RiskContextInput,
 )
+from mass.api.schemas.common import PaginationMeta
 from mass.api.schemas.questionnaire import RiskQuestionnaire, compute_risk_factors
 from mass.core.types import AttackCategory
 from mass.policy.guardrails import get_default_guardrails
@@ -166,7 +168,8 @@ INSTRUCTIONS:
 - For each guardrail, provide working code examples that address the specific attack patterns found
 - If a finding mentions a specific technique (e.g. "roleplay extraction", "delimiter confusion"), the guardrail should counter THAT technique specifically
 - Code examples should be production-ready Python (FastAPI middleware or standalone functions) and/or nginx/yaml configs
-- Focus on what a proxy/gateway operator would deploy to block the specific attacks that were found{risk_severity_instruction}
+- Focus on what a proxy/gateway operator would deploy to block the specific attacks that were found
+- IMPORTANT: For each guardrail, also provide platform_configs with YAML configurations for deploying the guardrail in AWS Bedrock and LiteLLM proxy{risk_severity_instruction}
 
 Respond with ONLY a valid JSON array. Each item must have:
 - "id": unique string like "ai-grd-xxx" (use a descriptive suffix matching the finding)
@@ -176,6 +179,33 @@ Respond with ONLY a valid JSON array. Each item must have:
 - "severity": one of critical, high, medium, low, advisory
 - "implementation_steps": array of 3-6 actionable steps (not generic — reference the deployment)
 - "code_examples": object mapping language (e.g. "python", "nginx", "yaml") to working code string
+- "platform_configs": object mapping platform name to YAML config string. MUST include these two keys:
+  - "aws_bedrock": A valid AWS CloudFormation YAML snippet for AWS::Bedrock::Guardrail. Always include the required top-level properties (Name, BlockedInputMessaging, BlockedOutputsMessaging) plus the relevant policy configs. Use ONLY these verified CloudFormation properties:
+    * ContentPolicyConfig.FiltersConfig[] — Type: PROMPT_ATTACK|HATE|INSULTS|SEXUAL|VIOLENCE|MISCONDUCT; InputStrength/OutputStrength: NONE|LOW|MEDIUM|HIGH; optional InputAction/OutputAction: BLOCK|NONE; optional InputEnabled/OutputEnabled: boolean
+    * TopicPolicyConfig.TopicsConfig[] — Name (string), Definition (string, 1-1000 chars), Examples (string array), Type: DENY; optional InputAction/OutputAction: BLOCK|NONE; optional InputEnabled/OutputEnabled: boolean
+    * SensitiveInformationPolicyConfig.PiiEntitiesConfig[] — Type: ADDRESS|AGE|NAME|EMAIL|PHONE|USERNAME|PASSWORD|DRIVER_ID|LICENSE_PLATE|CREDIT_DEBIT_CARD_CVV|CREDIT_DEBIT_CARD_EXPIRY|CREDIT_DEBIT_CARD_NUMBER|PIN|IP_ADDRESS|MAC_ADDRESS|URL|AWS_ACCESS_KEY|AWS_SECRET_KEY|US_SOCIAL_SECURITY_NUMBER|US_BANK_ACCOUNT_NUMBER|US_PASSPORT_NUMBER (and other country-specific types); Action: BLOCK|ANONYMIZE|NONE; optional InputAction/OutputAction, InputEnabled/OutputEnabled
+    * SensitiveInformationPolicyConfig.RegexesConfig[] — Name (string), Pattern (regex string), Description (string), Action: BLOCK|ANONYMIZE|NONE
+    * WordPolicyConfig.WordsConfig[] — Text (string); optional InputAction/OutputAction: BLOCK|NONE
+    * WordPolicyConfig.ManagedWordListsConfig[] — Type: PROFANITY; optional InputAction/OutputAction: BLOCK|NONE
+    * ContextualGroundingPolicyConfig.FiltersConfig[] — Type: GROUNDING|RELEVANCE; Threshold: 0.0-1.0
+    Example skeleton:
+      Type: AWS::Bedrock::Guardrail
+      Properties:
+        Name: guardrail-name
+        BlockedInputMessaging: "Request blocked."
+        BlockedOutputsMessaging: "Response blocked."
+        ContentPolicyConfig:
+          FiltersConfig:
+            - Type: PROMPT_ATTACK
+              InputStrength: HIGH
+              OutputStrength: HIGH
+        TopicPolicyConfig:
+          TopicsConfig:
+            - Name: topic-name
+              Definition: "Description of denied topic"
+              Examples: ["example prompt"]
+              Type: DENY
+  - "litellm": A valid LiteLLM proxy config.yaml snippet showing the guardrails section with guardrail_name, litellm_params (guardrail type like bedrock/presidio/custom_guardrail, mode: pre_call/post_call/during_call, relevant params). For content filters use bedrock guardrail type with guardrailIdentifier placeholder. For PII use presidio with pii_entities_config. For custom logic use custom_guardrail with the module path.
 - "mitigates": array of attack categories from the findings above
 - "compliance": array of compliance IDs (e.g. "LLM01", "NIST-GV", "OWASP-LLM")
 - "effort": low, medium, or high
@@ -184,27 +214,43 @@ Respond with ONLY a valid JSON array. Each item must have:
 Return ONLY the JSON array, no markdown fencing."""
 
 
-_POLICY_PROMPT = """You are an organizational security policy advisor. Based on actual scan findings from this AI deployment, draft organizational policies that address the specific risks discovered.
+_POLICY_PROMPT = """You are an AI governance and security policy advisor with deep expertise in AI regulatory frameworks. Based on actual scan findings from this AI deployment, draft organizational policies that address the specific risks discovered AND map to established AI governance frameworks.
 
 TARGET DEPLOYMENT: {target_name}
 
 SCAN FINDINGS (ordered by severity):
 {findings_text}
 {risk_context_section}
+REFERENCE FRAMEWORKS (map every policy to at least 2 of these):
+1. NIST AI RMF (AI 100-1) — Functions: GOVERN (GV), MAP (MP), MEASURE (MS), MANAGE (MG)
+   Key controls: GV-1 (governance policies), GV-1.1 (legal/regulatory requirements), GV-1.2 (trustworthiness), GV-3 (workforce diversity), GV-4 (org practices), GV-6 (feedback), MP-2 (AI categorization), MP-3 (AI benefits/costs), MP-4 (risks & impacts), MP-5 (likelihood), MS-1 (risk metrics), MS-2 (AI system evaluation), MS-3 (risk tracking), MS-4 (output feedback), MG-1 (risk prioritization), MG-2 (risk response), MG-3 (risk management), MG-4 (risk treatment)
+2. ISO/IEC 42001 — AI Management System clauses: 4.1 (org context), 5.1 (leadership), 6.1 (risk actions), 6.2 (objectives), 7.2 (competence), 7.4 (communication), 8.1 (operational planning), 8.2 (AI risk assessment), 8.3 (AI risk treatment), 8.4 (AI system lifecycle), 9.1 (monitoring), 9.2 (internal audit), 10.1 (nonconformity), 10.2 (continual improvement), A.2 (AI policies), A.3 (internal org), A.4 (resources), A.5 (AI system lifecycle), A.6 (data), A.7 (AI system)
+3. EU AI Act — Risk tiers: Prohibited (Art.5), High-Risk (Art.6-7, Annex III), Limited (Art.52), Minimal. Key requirements: Art.9 (risk management), Art.10 (data governance), Art.11 (technical documentation), Art.13 (transparency), Art.14 (human oversight), Art.15 (accuracy/robustness/cybersecurity), Art.17 (quality management), Art.29 (user obligations)
+4. OWASP LLM Top 10 (2025) — LLM01 (Prompt Injection), LLM02 (Sensitive Info Disclosure), LLM03 (Supply Chain), LLM04 (Data/Model Poisoning), LLM05 (Improper Output Handling), LLM06 (Excessive Agency), LLM07 (System Prompt Leakage), LLM08 (Vector/Embedding Weaknesses), LLM09 (Misinformation), LLM10 (Unbounded Consumption)
+5. MITRE ATLAS — Tactics: Reconnaissance (AML.TA0002), Resource Development (AML.TA0001), ML Model Access (AML.TA0000), Execution (AML.TA0003), Persistence (AML.TA0004), Evasion (AML.TA0005), Impact (AML.TA0006). Key techniques: AML.T0043 (Craft Adversarial Data), AML.T0040 (ML Model Inference API Access), AML.T0024 (Exfiltration via ML Inference API), AML.T0047 (ML-Enabled Product Abuse), AML.T0048 (Prompt Injection)
+
 INSTRUCTIONS:
 - Generate 4-6 organizational policies tied to the SPECIFIC vulnerabilities found above
 - Each policy should name the risk it addresses (e.g. "System Prompt Protection Policy" if prompt leakage was found)
+- EVERY policy MUST include framework_mappings with specific control IDs from at least 2 of the 5 frameworks listed above — cite exact clause numbers, not just framework names
 - Assign realistic owner groups based on who would actually enforce the policy
 - Remediation actions should be concrete steps (not vague like "review and update")
-- Assets covered should reference the actual deployment type (AI model, API endpoint, proxy, data pipeline, etc.){risk_severity_instruction}
+- Assets covered should reference the actual deployment type (AI model, API endpoint, proxy, data pipeline, etc.)
+- Set policy_category to reflect the primary area: governance, risk_management, compliance, technical_controls, incident_response, data_protection, model_lifecycle, or monitoring
+- Set review_frequency based on risk: critical/high → quarterly, medium → semi_annual, low → annual
+- Set implementation_priority: critical findings → immediate, high → short_term, medium → medium_term, low → long_term{risk_severity_instruction}
 
 Respond with ONLY a valid JSON array. Each item must have:
 - "name": policy name that references the specific risk (e.g. "Prompt Injection Response Policy for {target_name}")
 - "owner_group": one of "Security", "Dev", "Legal", "HR", "IR" (Incident Response)
-- "description": 2-3 sentence policy description referencing the specific findings
+- "description": 2-3 sentence policy description referencing the specific findings AND citing relevant framework requirements
+- "policy_category": one of "governance", "risk_management", "compliance", "technical_controls", "incident_response", "data_protection", "model_lifecycle", "monitoring"
 - "assets_covered": array of assets/systems this applies to (be specific to this deployment)
 - "violation_severity": one of "critical", "high", "medium", "low"
 - "remediation_actions": array of 3-5 concrete remediation actions when violated
+- "framework_mappings": object mapping framework keys to arrays of specific control IDs. Keys must be from: "nist_ai_rmf", "iso_42001", "eu_ai_act", "owasp_llm_top10", "mitre_atlas". Example: {{"nist_ai_rmf": ["GV-1.1", "MG-2"], "owasp_llm_top10": ["LLM01"], "eu_ai_act": ["Art.9", "Art.15"]}}
+- "review_frequency": one of "quarterly", "semi_annual", "annual"
+- "implementation_priority": one of "immediate", "short_term", "medium_term", "long_term"
 
 Return ONLY the JSON array, no markdown fencing."""
 
@@ -245,23 +291,34 @@ async def _call_llm(
 ) -> tuple[str, str]:
     """Send a prompt to the LLM and return (response_text, model_used).
 
-    Reuses provider dispatchers from the chat route.
+    Reuses provider dispatchers from the chat route with model-aware
+    parameter adjustment (temperature clamping, reasoning model handling).
     """
-    from mass.api.routes.chat import _PROVIDER_DEFAULTS, _PROVIDERS
-
-    defaults = _PROVIDER_DEFAULTS.get(provider, {})
-    resolved_model = model or defaults.get("model", "")
-    resolved_endpoint = (
-        endpoint
-        or os.getenv(defaults.get("endpoint_env", ""), "")
-        or defaults.get("endpoint_fallback", "")
+    from mass.api.routes.chat import _PROVIDERS
+    from mass.api.utils.llm_config import (
+        PROVIDER_DEFAULTS,
+        is_reasoning_model,
+        resolve_api_key,
+        resolve_llm_config,
     )
-    resolved_key = api_key or os.getenv(defaults.get("key_env", ""), "")
 
-    messages: list[dict[str, str]] = [
-        {"role": "system", "content": "You are a JSON-only response AI. Return only valid JSON arrays."},
-        {"role": "user", "content": prompt},
-    ]
+    cfg = resolve_llm_config(provider=provider, model=model, api_key=api_key, endpoint=endpoint, activity="guardrails")
+    resolved_model = cfg.model
+    resolved_endpoint = cfg.endpoint
+    resolved_key = cfg.api_key
+
+    # OpenAI reasoning models (o-series, GPT-5) require "developer" role
+    # instead of "system" — fold system instruction into the user prompt.
+    system_instruction = "You are a JSON-only response AI. Return only valid JSON arrays."
+    if provider in ("openai", "grok") and is_reasoning_model(resolved_model):
+        messages: list[dict[str, str]] = [
+            {"role": "user", "content": system_instruction + "\n\n" + prompt},
+        ]
+    else:
+        messages = [
+            {"role": "system", "content": system_instruction},
+            {"role": "user", "content": prompt},
+        ]
 
     handler = _PROVIDERS.get(provider)
     if not handler:
@@ -291,29 +348,77 @@ async def _call_llm(
             temperature=0.4,
         )
 
-    return result.get("content", ""), resolved_model
+    content = result.get("content", "")
+    logger.info(
+        "LLM raw response (provider=%s, model=%s): length=%d, first_200=%.200s",
+        provider, resolved_model, len(content), content[:200] if content else "(empty)",
+    )
+    return content, resolved_model
 
 
 def _parse_json_array(text: str) -> list[dict[str, Any]]:
     """Best-effort parse a JSON array from LLM response text."""
+    if not text or not text.strip():
+        logger.warning("_parse_json_array: empty input")
+        return []
+
     text = text.strip()
 
-    # Strip markdown code fencing if present
-    if text.startswith("```"):
-        text = text.split("\n", 1)[-1]
-    if text.endswith("```"):
-        text = text.rsplit("```", 1)[0]
-    text = text.strip()
+    import re
 
+    # Strip reasoning/thinking tags (Qwen, DeepSeek, etc.)
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+    text = re.sub(r"<reasoning>.*?</reasoning>", "", text, flags=re.DOTALL).strip()
+
+    # Strip markdown code fencing (```json ... ``` or ``` ... ```)
+    fenced = re.search(r"```(?:json)?\s*\n?(.*?)```", text, re.DOTALL)
+    if fenced:
+        text = fenced.group(1).strip()
+
+    # Try direct parse first
     try:
         parsed = json.loads(text)
         if isinstance(parsed, list):
             return parsed
+        if isinstance(parsed, dict):
+            # Some models wrap in {"guardrails": [...]} or similar
+            for key in ("guardrails", "items", "data", "results"):
+                if key in parsed and isinstance(parsed[key], list):
+                    return parsed[key]
     except json.JSONDecodeError:
         pass
 
-    # Try to find array within the text
+    # Try to find array within the text using bracket matching
     start = text.find("[")
+    if start != -1:
+        # Find matching closing bracket by counting nesting
+        depth = 0
+        in_string = False
+        escape = False
+        for i in range(start, len(text)):
+            c = text[i]
+            if escape:
+                escape = False
+                continue
+            if c == "\\":
+                escape = True
+                continue
+            if c == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if c == "[":
+                depth += 1
+            elif c == "]":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        return json.loads(text[start : i + 1])
+                    except json.JSONDecodeError:
+                        break
+
+    # Last resort: try rfind approach
     end = text.rfind("]")
     if start != -1 and end != -1 and end > start:
         try:
@@ -321,6 +426,7 @@ def _parse_json_array(text: str) -> list[dict[str, Any]]:
         except json.JSONDecodeError:
             pass
 
+    logger.warning("_parse_json_array: could not parse JSON from text (len=%d)", len(text))
     return []
 
 
@@ -340,6 +446,7 @@ def _parse_json_array(text: str) -> list[dict[str, Any]]:
 async def generate_guardrails_policies(
     request: GenerateGuardrailsRequest,
     tenant: CurrentTenantDep,
+    guardrail_repo: GuardrailSetRepo,
 ) -> GenerateGuardrailsResponse:
     """Generate guardrail and policy recommendations from scan findings."""
 
@@ -391,6 +498,12 @@ async def generate_guardrails_policies(
             risk_severity_instruction=risk_instruction,
         )
         try:
+            logger.info(
+                "Generating AI guardrails: provider=%s, model=%s, findings=%d",
+                request.provider,
+                request.model or "(default)",
+                len(request.findings),
+            )
             response_text, model_used = await _call_llm(
                 prompt,
                 request.provider,
@@ -398,17 +511,39 @@ async def generate_guardrails_policies(
                 request.api_key,
                 request.endpoint,
             )
+            logger.info(
+                "AI guardrail LLM response length=%d, preview=%.200s",
+                len(response_text),
+                response_text[:200] if response_text else "(empty)",
+            )
+            if not response_text or not response_text.strip():
+                logger.warning("AI guardrail LLM returned empty response")
             items = _parse_json_array(response_text)
+            logger.info("Parsed %d guardrail items from LLM response", len(items))
             for item in items:
                 try:
                     item["source"] = "ai_generated"
+                    # Ensure required fields have defaults
+                    item.setdefault("implementation_steps", [])
+                    item.setdefault("code_examples", {})
+                    item.setdefault("configuration_examples", {})
+                    item.setdefault("platform_configs", {})
+                    item.setdefault("mitigates", [])
+                    item.setdefault("compliance", [])
+                    item.setdefault("effort", "medium")
+                    item.setdefault("effectiveness", "medium")
                     ai_guardrails.append(GuardrailItem(**item))
-                except Exception:
+                except Exception as item_err:
+                    logger.warning(
+                        "Failed to validate guardrail item: %s — data: %s",
+                        item_err,
+                        str(item)[:200],
+                    )
                     continue
         except HTTPException:
             raise
         except Exception as e:
-            logger.warning("AI guardrail generation failed: %s", e)
+            logger.warning("AI guardrail generation failed: %s", e, exc_info=True)
 
         # Apply severity adjustment to AI guardrails too
         if risk_multiplier and risk_multiplier >= 1.8:
@@ -435,6 +570,10 @@ async def generate_guardrails_policies(
             for item in items:
                 try:
                     item.setdefault("related_findings", finding_ids)
+                    item.setdefault("framework_mappings", {})
+                    item.setdefault("policy_category", "governance")
+                    item.setdefault("review_frequency", "quarterly")
+                    item.setdefault("implementation_priority", "short_term")
                     item["source"] = "ai_generated"
                     policies.append(PolicyItem(**item))
                 except Exception:
@@ -448,7 +587,7 @@ async def generate_guardrails_policies(
         if risk_multiplier and risk_multiplier >= 1.8:
             _apply_policy_adjustment(policies, risk_multiplier)
 
-    return GenerateGuardrailsResponse(
+    response = GenerateGuardrailsResponse(
         registry_guardrails=registry_guardrails,
         ai_guardrails=ai_guardrails,
         policies=policies,
@@ -458,4 +597,110 @@ async def generate_guardrails_policies(
         risk_multiplier=risk_multiplier,
         risk_factors=risk_factors,
         risk_level=risk_level,
+    )
+
+    # Auto-persist to database
+    try:
+        from mass.storage.models.ai_artifacts import GuardrailSet
+
+        gs = GuardrailSet(
+            tenant_id=tenant.tenant_id,
+            scan_id=getattr(request, "scan_id", None),
+            target_name=request.target_name or "",
+            provider=request.provider,
+            model_used=model_used,
+            findings_analyzed=len(request.findings),
+            risk_multiplier=risk_multiplier,
+            risk_level=risk_level,
+            risk_factors=json.dumps(risk_factors) if risk_factors else None,
+            registry_guardrails=json.dumps([g.model_dump() for g in registry_guardrails]),
+            ai_guardrails=json.dumps([g.model_dump() for g in ai_guardrails]),
+            policies=json.dumps([p.model_dump() for p in policies]),
+        )
+        created = await guardrail_repo.create(gs)
+        response.id = created.id
+        logger.info("Persisted guardrail set %s", created.id)
+    except Exception as e:
+        logger.warning("Failed to persist guardrail set: %s", e)
+
+    # Publish GUARDRAIL_GENERATED event
+    try:
+        from mass.core.events import publish_event, Event, EventType
+        await publish_event(Event(
+            type=EventType.GUARDRAIL_GENERATED,
+            data={
+                "scan_id": request.scan_id,
+                "risk_level": response.risk_level,
+                "guardrails_count": len(response.registry_guardrails) + len(response.ai_guardrails),
+            },
+            tenant_id=tenant.tenant_id,
+        ))
+    except Exception:
+        pass
+
+    return response
+
+
+# ---- GET endpoints for persisted guardrail sets ----
+
+
+def _guardrail_set_to_response(gs: "GuardrailSet") -> GenerateGuardrailsResponse:
+    """Convert a DB GuardrailSet to the API response schema."""
+    return GenerateGuardrailsResponse(
+        id=gs.id,
+        scan_id=gs.scan_id,
+        registry_guardrails=[
+            GuardrailItem(**g) for g in (json.loads(gs.registry_guardrails) if gs.registry_guardrails else [])
+        ],
+        ai_guardrails=[
+            GuardrailItem(**g) for g in (json.loads(gs.ai_guardrails) if gs.ai_guardrails else [])
+        ],
+        policies=[
+            PolicyItem(**p) for p in (json.loads(gs.policies) if gs.policies else [])
+        ],
+        provider=gs.provider,
+        model_used=gs.model_used,
+        findings_analyzed=gs.findings_analyzed,
+        risk_multiplier=gs.risk_multiplier,
+        risk_factors=json.loads(gs.risk_factors) if gs.risk_factors else None,
+        risk_level=gs.risk_level,
+        created_at=gs.created_at.isoformat() if gs.created_at else None,
+    )
+
+
+@router.get(
+    "/{guardrail_set_id}",
+    response_model=GenerateGuardrailsResponse,
+    summary="Get a persisted guardrail set",
+)
+async def get_guardrail_set(
+    guardrail_set_id: str,
+    tenant: CurrentTenantDep,
+    guardrail_repo: GuardrailSetRepo,
+) -> GenerateGuardrailsResponse:
+    gs = await guardrail_repo.get(guardrail_set_id)
+    if not gs or gs.tenant_id != tenant.tenant_id:
+        raise HTTPException(status_code=404, detail="Guardrail set not found")
+    return _guardrail_set_to_response(gs)
+
+
+@router.get(
+    "/by-scan/{scan_id}",
+    response_model=GuardrailSetListResponse,
+    summary="Get guardrail sets for a scan",
+)
+async def get_guardrail_sets_by_scan(
+    scan_id: str,
+    tenant: CurrentTenantDep,
+    guardrail_repo: GuardrailSetRepo,
+) -> GuardrailSetListResponse:
+    sets = await guardrail_repo.get_by_scan(scan_id, tenant_id=tenant.tenant_id)
+    return GuardrailSetListResponse(
+        items=[_guardrail_set_to_response(gs) for gs in sets],
+        pagination=PaginationMeta(
+            total=len(sets),
+            offset=0,
+            limit=len(sets) or 100,
+            has_more=False,
+        ),
     )

@@ -37,9 +37,7 @@ class MetricsRegistry:
     def __init__(self) -> None:
         self._metrics: dict[str, _Metric] = {}
         self._lock = threading.Lock()
-        self._histogram_buckets = [
-            0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
-        ]
+        self._created_at = time.time()
 
     def _get_or_create(
         self, name: str, metric_type: str, help_text: str = ""
@@ -129,11 +127,6 @@ class MetricsRegistry:
         lines.append(f"mass_uptime_seconds {time.time() - self._created_at}")
 
         return "\n".join(lines) + "\n"
-
-    def __init__(self) -> None:
-        self._metrics: dict[str, _Metric] = {}
-        self._lock = threading.Lock()
-        self._created_at = time.time()
 
 
 # Singleton

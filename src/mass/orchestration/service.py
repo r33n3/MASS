@@ -559,6 +559,11 @@ class ScanService:
             has_infrastructure=self._has_matching_files(
                 all_files, "Dockerfile", "docker-compose*", "*.yaml", "*.tf",
             ),
+            has_rag_pipeline=self._has_matching_files(
+                all_files, "*rag*", "*vector*", "*embed*", "*retriev*",
+                "*chroma*", "*pinecone*", "*qdrant*", "*weaviate*", "*milvus*",
+                "*langchain*", "*llama_index*", "*llamaindex*",
+            ),
             has_secrets_risk=True,
             has_model_endpoint=bool(model_endpoint),
             architecture_map=architecture_map,

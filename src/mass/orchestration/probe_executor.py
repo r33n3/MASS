@@ -107,6 +107,9 @@ class ProbeExecutorConfig:
     # jailbreak variant techniques to test resistance
     enable_variants: bool = False
     max_variants_per_prompt: int = 3
+    # Adaptive probing: LLM-assisted mutation of blocked payloads
+    adaptive_rounds: int = 0  # 0 = disabled, 1-3 = rounds of mutation
+    adaptive_max_mutations: int = 5
 
 
 @dataclass
@@ -237,6 +240,47 @@ class ProbeExecutor:
                         logger.error(error_msg)
                         result.add_error(error_msg)
 
+        # Adaptive rounds: LLM-assisted mutation of blocked payloads
+        if self.config.adaptive_rounds > 0 and result.probe_results:
+            try:
+                from mass.probes.adaptive import AdaptiveProbeEngine, AdaptiveConfig
+                adaptive_cfg = AdaptiveConfig(
+                    max_rounds=self.config.adaptive_rounds,
+                    max_mutations_per_round=self.config.adaptive_max_mutations,
+                )
+                # Collect detectors for re-evaluation
+                all_detectors = []
+                for dname in ["keyword", "refusal", "instruction_following"]:
+                    d = detector_registry.get(dname)
+                    if d:
+                        all_detectors.append(d)
+
+                engine = AdaptiveProbeEngine(
+                    target_runner=self.runner,
+                    mutation_runner=self.runner,
+                    config=adaptive_cfg,
+                )
+                adaptive_result = engine.run_adaptive(
+                    initial_results=result.probe_results,
+                    detectors=all_detectors,
+                    system_prompt=self.config.system_prompt,
+                )
+                # Merge adaptive findings into main result
+                for finding in adaptive_result.total_findings:
+                    with result._lock:
+                        result.findings.append(finding)
+                        result.vulnerable_count += 1
+                result.prompts_sent += adaptive_result.total_probes_sent
+                logger.info(
+                    "Adaptive probing: %d rounds, %d mutations, %d bypasses",
+                    len(adaptive_result.rounds),
+                    adaptive_result.total_mutations,
+                    adaptive_result.total_bypassed,
+                )
+            except Exception as e:
+                logger.warning("Adaptive probing failed: %s", e)
+                result.add_error(f"Adaptive probing failed: {e}")
+
         result.duration_seconds = time.time() - start
         logger.info(
             f"Probe execution complete: {result.probes_run} probes, "
@@ -272,6 +316,7 @@ class ProbeExecutor:
         import mass.probes.harmful.dangerous  # noqa: F401
         import mass.probes.harmful.illegal  # noqa: F401
         import mass.probes.harmful.violence  # noqa: F401
+        import mass.probes.multimodal.image_probes  # noqa: F401
 
         if self.config.probe_names:
             probes = []

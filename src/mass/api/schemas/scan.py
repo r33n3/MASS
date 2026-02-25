@@ -19,6 +19,15 @@ class ScanCreate(BaseModel):
     profile: str = Field(default="standard", description="Scan profile: quick, standard, comprehensive, custom")
     config: dict | None = Field(default=None, description="Custom scan configuration")
     triggered_by: str | None = Field(default=None, description="What triggered the scan: user, api, webhook, scheduled")
+    target_files: list[str] | None = Field(
+        default=None,
+        description="Specific file paths to scan. If null, scans all files in the deployment source path.",
+    )
+    exclude_paths: list[str] | None = Field(
+        default=None,
+        description="Glob patterns or file paths to exclude (e.g. 'docs/**', 'tests/', '*.md'). "
+                    "Applied after target_files or full file list using fnmatch.",
+    )
 
 
 class ScanStatusResponse(BaseModel):

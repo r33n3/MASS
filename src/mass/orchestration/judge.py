@@ -451,9 +451,18 @@ class FinalJudge:
             provider: Provider name to use when creating a runner.
             model: Model name override.
         """
+        from mass.api.utils.llm_config import resolve_llm_config
+
         self._runner = runner
-        self._provider = provider
-        self._model = model
+        # Resolve via activity override so the verdict can use a
+        # different (typically stronger) model than the platform default.
+        cfg = resolve_llm_config(
+            provider=provider if provider != "ollama" else None,
+            model=model,
+            activity="verdict",
+        )
+        self._provider = cfg.provider
+        self._model = cfg.model
         self._initialized = runner is not None
 
     def _ensure_runner(self) -> bool:

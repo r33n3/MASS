@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import delete, func, select
 
 from mass.api.dependencies import (
-    CurrentTenantDep,
+    AdminDep,
     DBSession,
     TenantRepo,
     UserRepo,
@@ -106,13 +106,12 @@ class UserListResponse(BaseModel):
     description="Get system-wide statistics (admin only).",
 )
 async def get_system_stats(
-    tenant: CurrentTenantDep,
+    tenant: AdminDep,
 ) -> SystemStats:
     """Get system-wide statistics.
 
     Requires admin privileges.
     """
-    # TODO: Verify admin privileges
     # TODO: Get actual statistics from database
 
     return SystemStats(
@@ -133,7 +132,7 @@ async def get_system_stats(
     description="List all tenants (admin only).",
 )
 async def list_tenants(
-    tenant: CurrentTenantDep,
+    tenant: AdminDep,
     tenant_repo: TenantRepo,
     pagination: PaginationDep,
 ) -> TenantListResponse:
@@ -141,7 +140,6 @@ async def list_tenants(
 
     Requires admin privileges.
     """
-    # TODO: Verify admin privileges
 
     tenants = await tenant_repo.list(
         offset=pagination.offset,
@@ -184,7 +182,7 @@ async def list_tenants(
 )
 async def create_tenant(
     request: TenantCreate,
-    current_tenant: CurrentTenantDep,
+    current_tenant: AdminDep,
     tenant_repo: TenantRepo,
 ) -> TenantResponse:
     """Create a new tenant.
@@ -192,8 +190,6 @@ async def create_tenant(
     Requires admin privileges.
     """
     from mass.storage.models.tenant import Tenant
-
-    # TODO: Verify admin privileges
 
     # Check if slug is unique
     existing = await tenant_repo.get_by_slug(request.slug)
@@ -233,14 +229,13 @@ async def create_tenant(
 )
 async def get_tenant(
     tenant_id: str,
-    current_tenant: CurrentTenantDep,
+    current_tenant: AdminDep,
     tenant_repo: TenantRepo,
 ) -> TenantResponse:
     """Get tenant details.
 
     Requires admin privileges.
     """
-    # TODO: Verify admin privileges
 
     tenant = await tenant_repo.get(tenant_id)
 
@@ -270,14 +265,13 @@ async def get_tenant(
 )
 async def deactivate_tenant(
     tenant_id: str,
-    current_tenant: CurrentTenantDep,
+    current_tenant: AdminDep,
     tenant_repo: TenantRepo,
 ) -> SuccessResponse:
     """Deactivate a tenant.
 
     Requires admin privileges.
     """
-    # TODO: Verify admin privileges
 
     tenant = await tenant_repo.get(tenant_id)
 
@@ -299,7 +293,7 @@ async def deactivate_tenant(
     description="List all users across tenants (admin only).",
 )
 async def list_all_users(
-    current_tenant: CurrentTenantDep,
+    current_tenant: AdminDep,
     user_repo: UserRepo,
     pagination: PaginationDep,
     tenant_id: str | None = None,
@@ -308,7 +302,6 @@ async def list_all_users(
 
     Requires admin privileges.
     """
-    # TODO: Verify admin privileges
 
     filters = {}
     if tenant_id:
@@ -356,7 +349,7 @@ async def list_all_users(
     ),
 )
 async def reset_all_data(
-    tenant: CurrentTenantDep,
+    tenant: AdminDep,
     db: DBSession,
 ) -> SuccessResponse:
     """Reset all operational data for a clean slate."""

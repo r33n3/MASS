@@ -173,7 +173,10 @@ async def _call_openai(
     }
 
     if is_reasoning:
-        payload["max_completion_tokens"] = 4096
+        # Reasoning models consume tokens for internal reasoning BEFORE
+        # producing visible output.  At 4096 the model exhausts the budget
+        # on reasoning alone and returns empty content.
+        payload["max_completion_tokens"] = 16384
     else:
         payload["temperature"] = 0.3
         payload["max_tokens"] = 4096
@@ -205,6 +208,15 @@ async def _call_openai(
         message = choice.get("message", {})
         content = message.get("content") or ""
 
+        # Check finish_reason for truncation
+        finish_reason = choice.get("finish_reason", "")
+        if finish_reason == "length":
+            logger.warning(
+                "OpenAI response truncated (finish_reason=length) for model %s. "
+                "Increase max_completion_tokens.",
+                model,
+            )
+
         # Reasoning models may return empty content with a refusal
         if not content and message.get("refusal"):
             logger.warning("OpenAI refusal: %s", message["refusal"])
@@ -214,7 +226,12 @@ async def _call_openai(
             content = data.get("output") or ""
 
         if not content:
-            logger.warning("Empty OpenAI response. Keys: %s", list(data.keys()))
+            usage = data.get("usage", {})
+            logger.warning(
+                "Empty OpenAI response for model %s. "
+                "finish_reason=%s, usage=%s, keys=%s",
+                model, finish_reason, usage, list(data.keys()),
+            )
 
         return content
 
@@ -259,6 +276,7 @@ class CodeArchitectureAnalyzer:
     ) -> None:
         cfg = resolve_llm_config(
             provider, model, api_key, endpoint,
+            activity="code_analysis",
             feature_model_override="hermes3:8b",
         )
         self.provider = cfg.provider
