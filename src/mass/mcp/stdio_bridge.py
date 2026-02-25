@@ -345,8 +345,23 @@ class StdioBridge:
 
     # ── Lifecycle ─────────────────────────────────────────────────
 
+    # Allowed runtime commands for subprocess execution
+    _ALLOWED_COMMANDS = frozenset({
+        "node", "npx", "python", "python3", "uvx", "deno", "bun",
+        "node.exe", "npx.exe", "python.exe", "python3.exe", "deno.exe", "bun.exe",
+    })
+
     async def start(self) -> str:
         """Start the bridge. Returns the HTTP URL."""
+        # Security: only allow known runtime commands to prevent command injection
+        cmd_base = os.path.basename(self.command).lower()
+        if cmd_base not in self._ALLOWED_COMMANDS and not os.path.isabs(self.command):
+            raise ValueError(
+                f"Command '{self.command}' is not in the allowed runtimes list: "
+                f"{', '.join(sorted(self._ALLOWED_COMMANDS))}. "
+                f"Use a full absolute path for custom executables."
+            )
+
         # 1. Resolve runtime
         resolved = resolve_runtime(self.command)
         logger.info("StdioBridge: starting %s %s", resolved, self.args)

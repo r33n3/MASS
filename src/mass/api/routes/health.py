@@ -49,7 +49,8 @@ async def _check_database() -> dict[str, Any]:
         latency_ms = round((time.perf_counter() - start) * 1000, 1)
         return {"status": "healthy", "latency_ms": latency_ms}
     except Exception as e:
-        return {"status": "unhealthy", "error": str(e)[:200]}
+        logger.warning("Database health check failed: %s", e)
+        return {"status": "unhealthy", "error": "database connection failed"}
 
 
 async def _check_redis() -> dict[str, Any]:
@@ -63,7 +64,8 @@ async def _check_redis() -> dict[str, Any]:
         latency_ms = round((time.perf_counter() - start) * 1000, 1)
         return {"status": "healthy", "latency_ms": latency_ms}
     except Exception as e:
-        return {"status": "unhealthy", "error": str(e)[:200]}
+        logger.warning("Redis health check failed: %s", e)
+        return {"status": "unhealthy", "error": "redis connection failed"}
 
 
 async def _check_queue() -> dict[str, Any]:
@@ -75,7 +77,8 @@ async def _check_queue() -> dict[str, Any]:
         depth = await redis.llen("mass:jobs:queue:scans") or 0
         return {"status": "healthy", "depth": depth}
     except Exception as e:
-        return {"status": "degraded", "error": str(e)[:200]}
+        logger.warning("Queue health check failed: %s", e)
+        return {"status": "degraded", "error": "queue check failed"}
 
 
 # ---------------------------------------------------------------------------
