@@ -4,6 +4,7 @@ Handles API key and JWT authentication.
 """
 
 import hashlib
+import hmac
 import logging
 from typing import Callable
 
@@ -107,12 +108,12 @@ class AuthMiddleware(BaseHTTPMiddleware):
 def hash_api_key(api_key: str) -> str:
     """Hash an API key for storage.
 
-    Uses SHA-256 with a salt from settings.
+    Uses HMAC-SHA256 with a salt from settings as the key.
     """
     settings = get_settings()
     salt = settings.auth.api_key_salt.encode()
     key_bytes = api_key.encode()
-    return hashlib.sha256(salt + key_bytes).hexdigest()
+    return hmac.new(salt, key_bytes, hashlib.sha256).hexdigest()
 
 
 def generate_api_key() -> tuple[str, str]:

@@ -782,10 +782,10 @@ async def chat(
             detail=f"Request to {provider} ({model}) timed out.{hint} Try again.",
         )
     except httpx.HTTPStatusError as e:
-        detail = e.response.text[:500] if e.response else str(e)
+        logger.warning("Chat upstream error from %s: %s %s", provider, e.response.status_code, e.response.text[:500] if e.response else "")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"{provider} returned error {e.response.status_code}: {detail}",
+            detail=f"{provider} returned error {e.response.status_code}.",
         )
     except HTTPException:
         raise
@@ -793,7 +793,7 @@ async def chat(
         logger.exception("Chat error with provider %s", provider)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Chat error: {str(e)}",
+            detail=f"Chat error: an internal error occurred with provider '{provider}'.",
         )
 
     latency_ms = (time.time() - start) * 1000
@@ -959,7 +959,7 @@ async def list_chat_models(
             return {"provider": "ollama", "models": models}
         except Exception as e:
             logger.warning("Failed to list Ollama models: %s", e)
-            return {"provider": "ollama", "models": [], "error": str(e)}
+            return {"provider": "ollama", "models": [], "error": "Failed to list Ollama models"}
 
     # For non-Ollama providers, return the default model
     defaults = PROVIDER_DEFAULTS.get(provider, {})
