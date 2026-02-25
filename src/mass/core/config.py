@@ -205,6 +205,15 @@ class MassSettings(BaseSettings):
         except (ValueError, TypeError):
             return {}
 
+    # Configurable directory paths
+    targets_dir: str = Field(default="/app/targets", description="Static analysis targets directory")
+    downloads_dir: str = Field(default="/app/downloads", description="Downloads/uploads directory")
+    github_clones_dir: str = Field(default="/app/github_clones", description="GitHub clones directory")
+    strategies_dir: str = Field(default="/app/data/strategies", description="Interrogation strategies directory")
+    reports_dir: str = Field(default="/app/data/reports", description="Report output directory")
+    sandbox_scenarios_dir: str = Field(default="/app/data/sandbox/scenarios", description="Sandbox scenarios directory")
+    guardrails_export_dir: str = Field(default="/app/data/guardrails_export", description="Guardrails export directory")
+
     # CI/CD Integration
     cicd_webhook_timeout: int = Field(
         default=30, ge=5, le=120,

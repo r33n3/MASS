@@ -100,7 +100,7 @@ class PIARequest(BaseModel):
 class PIAFinding(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    id: str
+    id: str = Field(default="")
     category: str
     risk_level: RiskLevel
     title: str
