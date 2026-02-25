@@ -82,8 +82,9 @@ MASS/
 
 ### Submitting Code
 
-1. **Create a branch** from `main`:
+1. **Create a branch** from `PROD`:
    ```bash
+   git checkout PROD
    git checkout -b feature/your-feature-name
    ```
 

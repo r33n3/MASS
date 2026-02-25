@@ -10,7 +10,7 @@ readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10"
 authors = [
-    { name = "r33n3", email = "mass@example.com" },
+    { name = "MASS Contributors" },
 ]
 keywords = [
     "ai-security",
@@ -91,6 +91,8 @@ providers = [
     "boto3>=1.34",
     "google-genai>=1.0",
     "azure-identity>=1.15",
+    "azure-storage-blob>=12.19",
+    "google-cloud-storage>=2.14",
 ]
 mcp-server = [
     "mcp>=1.0.0",
@@ -112,7 +114,7 @@ Homepage = "https://github.com/r33n3/MASS"
 Documentation = "https://github.com/r33n3/MASS#readme"
 Repository = "https://github.com/r33n3/MASS"
 Issues = "https://github.com/r33n3/MASS/issues"
-Changelog = "https://github.com/r33n3/MASS/blob/main/CHANGELOG.md"
+Changelog = "https://github.com/r33n3/MASS/blob/PROD/CHANGELOG.md"
 
 [project.scripts]
 mass = "mass.cli:app"
