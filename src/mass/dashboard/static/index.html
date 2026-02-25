@@ -14593,7 +14593,7 @@
 
                 // Cell 2: stats
                 if (updates.status === 'running' || updates.status === 'connecting') {
-                    cells[2].innerHTML = updates.message ? `<span class="job-status-msg">${updates.message}</span>` : 'Running...';
+                    cells[2].innerHTML = updates.message ? `<span class="job-status-msg">${escapeHtml(updates.message)}</span>` : 'Running...';
                 } else if (updates.status === 'completed' || updates.status === 'failed') {
                     cells[2].textContent = `${updates.successful_attacks || 0} / ${updates.strategies_run || 0}`;
                 }
@@ -14624,7 +14624,7 @@
                 const meta = item.querySelector('.job-meta');
                 if (meta) {
                     if (updates.status === 'running' || updates.status === 'connecting') {
-                        meta.innerHTML = updates.message ? `<span class="job-status-msg">${updates.message}</span>` : 'Running...';
+                        meta.innerHTML = updates.message ? `<span class="job-status-msg">${escapeHtml(updates.message)}</span>` : 'Running...';
                     } else if (updates.duration_seconds) {
                         meta.textContent = `${formatDuration(updates.duration_seconds)} \u2022 ${updates.strategies_run || 0} strategies \u2022 ${updates.successful_attacks || 0} successful`;
                     }

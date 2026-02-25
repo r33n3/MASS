@@ -107,6 +107,13 @@ def _stable_dir_name(uri: str, prefix: str = "") -> str:
 
 # ── Host path import via Docker API ───────────────────────────────────
 
+_BLOCKED_HOST_PATHS = (
+    "/etc", "/root", "/home", "/var", "/tmp", "/proc", "/sys", "/dev",
+    "/boot", "/run", "/usr", "/sbin", "/bin", "/lib", "/opt",
+    "/mnt", "/media", "/srv",
+)
+
+
 async def fetch_from_host(host_path: str, dest_dir: Path) -> Path:
     """Copy files from a host OS path into the container using Docker API.
 
@@ -121,6 +128,9 @@ async def fetch_from_host(host_path: str, dest_dir: Path) -> Path:
 
     Returns:
         Path to the copied directory inside the container.
+
+    Raises:
+        ValueError: If the host path points to a sensitive system directory.
     """
     from mass.mcp.container import _docker_api, docker_available
 
@@ -132,6 +142,15 @@ async def fetch_from_host(host_path: str, dest_dir: Path) -> Path:
 
     # Normalise for Docker: forward slashes
     normalised = host_path.replace("\\", "/")
+
+    # Security: block sensitive host directories
+    norm_lower = normalised.rstrip("/").lower()
+    for blocked in _BLOCKED_HOST_PATHS:
+        if norm_lower == blocked or norm_lower.startswith(blocked + "/"):
+            raise ValueError(
+                f"Host path '{host_path}' is blocked: access to system "
+                f"directories is not permitted. Use a project-specific path."
+            )
     dir_name = _stable_dir_name(normalised, prefix="host_")
     dest_path = dest_dir / dir_name
 

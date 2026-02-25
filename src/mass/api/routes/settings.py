@@ -19,7 +19,8 @@ from typing import Any
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
-from mass.api.dependencies import CurrentTenantDep
+from fastapi import HTTPException, status as http_status
+from mass.api.dependencies import AdminDep, CurrentTenantDep
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +84,14 @@ class PlatformDefaultsResponse(BaseModel):
     activity_overrides: ActivityOverridesResponse = Field(
         default_factory=ActivityOverridesResponse,
     )
+    # Configurable directories
+    targets_dir: str = Field(default="/app/targets", description="Static analysis targets directory")
+    downloads_dir: str = Field(default="/app/downloads", description="Downloads/uploads directory")
+    github_clones_dir: str = Field(default="/app/github_clones", description="GitHub clones directory")
+    strategies_dir: str = Field(default="/app/data/strategies", description="Interrogation strategies directory")
+    reports_dir: str = Field(default="/app/data/reports", description="Report output directory")
+    sandbox_scenarios_dir: str = Field(default="/app/data/sandbox/scenarios", description="Sandbox scenarios directory")
+    guardrails_export_dir: str = Field(default="/app/data/guardrails_export", description="Guardrails export directory")
 
 
 class PlatformDefaultsUpdate(BaseModel):
@@ -97,6 +106,14 @@ class PlatformDefaultsUpdate(BaseModel):
     activity_overrides: ActivityOverridesUpdate | None = Field(
         None, description="Per-activity model overrides",
     )
+    # Configurable directories
+    targets_dir: str | None = Field(None, description="Static analysis targets directory")
+    downloads_dir: str | None = Field(None, description="Downloads/uploads directory")
+    github_clones_dir: str | None = Field(None, description="GitHub clones directory")
+    strategies_dir: str | None = Field(None, description="Interrogation strategies directory")
+    reports_dir: str | None = Field(None, description="Report output directory")
+    sandbox_scenarios_dir: str | None = Field(None, description="Sandbox scenarios directory")
+    guardrails_export_dir: str | None = Field(None, description="Guardrails export directory")
 
 
 # ── Persistent settings helpers ──────────────────────────────────────
@@ -184,6 +201,13 @@ async def get_platform_defaults(tenant: CurrentTenantDep) -> PlatformDefaultsRes
         has_google_key=bool(settings.google_api_key.get_secret_value()),
         has_grok_key=bool(settings.grok_api_key.get_secret_value()),
         activity_overrides=activity_resp,
+        targets_dir=settings.targets_dir,
+        downloads_dir=settings.downloads_dir,
+        github_clones_dir=settings.github_clones_dir,
+        strategies_dir=settings.strategies_dir,
+        reports_dir=settings.reports_dir,
+        sandbox_scenarios_dir=settings.sandbox_scenarios_dir,
+        guardrails_export_dir=settings.guardrails_export_dir,
     )
 
 
@@ -193,14 +217,33 @@ async def get_platform_defaults(tenant: CurrentTenantDep) -> PlatformDefaultsRes
 )
 async def update_platform_defaults(
     update: PlatformDefaultsUpdate,
-    tenant: CurrentTenantDep,
+    tenant: AdminDep,
 ) -> dict[str, Any]:
     """Update platform defaults.
 
     Persists to ``data/platform_settings.json`` (survives container
     restarts) and updates ``os.environ`` so changes take effect
-    immediately.
+    immediately.  Requires admin privileges.
     """
+    # Validate directory paths stay within /app/
+    _SAFE_PREFIXES = ("/app/", "./")
+    for field_name in (
+        "targets_dir", "downloads_dir", "github_clones_dir",
+        "strategies_dir", "reports_dir", "sandbox_scenarios_dir",
+        "guardrails_export_dir",
+    ):
+        value = getattr(update, field_name, None)
+        if value is not None:
+            normalised = os.path.normpath(value)
+            if ".." in normalised or not any(
+                normalised.startswith(p) for p in _SAFE_PREFIXES
+            ):
+                raise HTTPException(
+                    status_code=http_status.HTTP_400_BAD_REQUEST,
+                    detail=f"Directory '{field_name}' must be under /app/. "
+                           f"Got: {value}",
+                )
+
     # Map update fields → env variable names
     updates: dict[str, str] = {}
     if update.default_provider is not None:
@@ -215,6 +258,22 @@ async def update_platform_defaults(
         updates["MASS_GOOGLE_API_KEY"] = update.google_api_key
     if update.grok_api_key is not None:
         updates["MASS_GROK_API_KEY"] = update.grok_api_key
+
+    # Configurable directories
+    if update.targets_dir is not None:
+        updates["MASS_TARGETS_DIR"] = update.targets_dir
+    if update.downloads_dir is not None:
+        updates["MASS_DOWNLOADS_DIR"] = update.downloads_dir
+    if update.github_clones_dir is not None:
+        updates["MASS_GITHUB_CLONES_DIR"] = update.github_clones_dir
+    if update.strategies_dir is not None:
+        updates["MASS_STRATEGIES_DIR"] = update.strategies_dir
+    if update.reports_dir is not None:
+        updates["MASS_REPORTS_DIR"] = update.reports_dir
+    if update.sandbox_scenarios_dir is not None:
+        updates["MASS_SANDBOX_SCENARIOS_DIR"] = update.sandbox_scenarios_dir
+    if update.guardrails_export_dir is not None:
+        updates["MASS_GUARDRAILS_EXPORT_DIR"] = update.guardrails_export_dir
 
     # Handle per-activity model overrides
     if update.activity_overrides is not None:

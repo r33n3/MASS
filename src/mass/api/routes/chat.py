@@ -12,11 +12,13 @@ The chat maintains conversation context via client-supplied history
 and adds a MASS-specific system prompt for security expertise.
 """
 
+import ipaddress
 import json
 import logging
 import os
 import time
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from fastapi import APIRouter, HTTPException, status
@@ -580,6 +582,40 @@ async def _call_provider_raw(
         raise ValueError(f"No raw dispatcher for provider: {provider}")
 
 
+# ---- Endpoint validation ----
+
+def _validate_endpoint_url(url: str) -> None:
+    """Block SSRF: reject endpoints pointing to private/internal networks."""
+    parsed = urlparse(url)
+    hostname = parsed.hostname or ""
+
+    # Must be http(s)
+    if parsed.scheme not in ("http", "https"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Endpoint must use http or https scheme, got: {parsed.scheme}",
+        )
+
+    # Block common internal hostnames
+    _blocked = {"localhost", "metadata.google.internal", "169.254.169.254"}
+    if hostname.lower() in _blocked:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Endpoint points to a blocked internal address.",
+        )
+
+    # Block private/reserved IP ranges
+    try:
+        addr = ipaddress.ip_address(hostname)
+        if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Endpoint points to a private or reserved IP address.",
+            )
+    except ValueError:
+        pass  # hostname is a DNS name, not an IP literal — allowed
+
+
 # ---- Endpoints ----
 
 @router.post(
@@ -609,9 +645,13 @@ async def chat(
                    f"Supported: {', '.join(_PROVIDERS.keys())}",
         )
 
+    # Validate user-supplied endpoint to prevent SSRF
+    chat_endpoint = request.endpoint
+    if chat_endpoint:
+        _validate_endpoint_url(chat_endpoint)
+
     # Resolve configuration via platform defaults
     # Chat Ollama priority: OLLAMA_CHAT_HOST > OLLAMA_ATTACKER_HOST > fallback
-    chat_endpoint = request.endpoint
     if not chat_endpoint and provider == "ollama":
         chat_endpoint = (
             os.getenv(_CHAT_OLLAMA_ENDPOINT_ENV, "")
